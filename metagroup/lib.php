@@ -29,6 +29,12 @@ defined('MOODLE_INTERNAL') || die();
  */
 define('ENROL_METAGROUP_CREATE_GROUP', -1);
 
+
+define('ENROL_METAGROUP_UPDATABLE', 1);
+define('ENROL_METAGROUP_NON_UPDATABLE', 0);
+/** Course enrol instance status: disabled but not initialized yet. (used in enrol->status)*/
+define('ENROL_METAGROUP_NON_UPDATABLE_INIT', 2);
+
 /**
  * Meta course enrolment plugin.
  * @author Petr Skoda
@@ -48,8 +54,21 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if (empty($instance)) {
             $enrol = $this->get_name();
             return get_string('pluginname', 'enrol_'.$enrol);
-        } else if (empty($instance->name)) {
+        } else if (!empty($instance->name)) {
+            return format_string($instance->name);
+        } else {
             $enrol = $this->get_name();
+            $source_coursename = format_string(get_course_display_name_for_list(get_course($instance->customchar1)));
+            
+            // Fallback if the group was deleted (ex. manually) but will be restored on next sync.
+            $source_groupname = $instance->customchar2;
+            // Get actual group name (since it could be renamed after this enrol method added).
+            $source_groupid = $instance->customint2;
+            $source_groupname = groups_get_group($source_groupid, 'name')->name ?: $source_groupname;
+            
+            $target_groupid = $instance->customint2;
+            $target_groupname = groups_get_group($target_groupid, 'name', MUST_EXIST)->name;
+
             $course = $DB->get_record('course', array('id'=>$instance->customint1));
             if ($course) {
                 $coursename = format_string(get_course_display_name_for_list($course));
@@ -57,9 +76,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 // Use course id, if course is deleted.
                 $coursename = $instance->customint1;
             }
-            return get_string('pluginname', 'enrol_' . $enrol) . ' (' . $coursename . ')';
-        } else {
-            return format_string($instance->name);
+            return get_string('defaultenrolnametext', 'enrol_' . $enrol, [
+                'method' => get_string('pluginname', 'enrol_' . $enrol),
+                'target_group' => $target_groupname,
+                'source_group' => $source_groupname,
+                'source_course' => $coursename,
+            ]);
         }
     }
 
@@ -119,27 +141,44 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
 
-        // Support creating multiple at once.
-        if (isset($fields['customint1']) && is_array($fields['customint1'])) {
-            $courses = array_unique($fields['customint1']);
-        } else if (isset($fields['customint1'])) {
-            $courses = array($fields['customint1']);
-        } else {
-            $courses = array(null); // Strange? Yes, but that's how it's working or instance is not created ever.
+        if (isset($fields['customint4']) && $fields['customint4'] == ENROL_METAGROUP_NON_UPDATABLE) {
+            // On creation of disabled instance, sync should be performed once.
+            $fields['customint4'] = ENROL_METAGROUP_NON_UPDATABLE_INIT;
         }
-        foreach ($courses as $courseid) {
+
+        // if (isset($fields['customint1'])) {
+        //     // Fetch & cache source course's fullname.
+        //     $fields['customchar1'] = format_string(get_course_display_name_for_list(get_course($fields['customint1'])));
+        // }
+
+        // Support creating multiple at once (for several source groups from the source course).
+        if (isset($fields['customint3']) && is_array($fields['customint3'])) {
+            $source_groups = array_unique($fields['customint3']);
+        } else if (isset($fields['customint3'])) {
+            $source_groups = array($fields['customint3']);
+        } else {
+            $source_groups = array(null); // Strange? Yes, but that's how it's working or instance is not created ever.
+        }
+        foreach ($source_groups as $source_groupid) {
             if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_GROUP) {
                 $context = context_course::instance($course->id);
                 require_capability('moodle/course:managegroups', $context);
-                $groupid = enrol_metagroup_create_new_group($course->id, $courseid);
+
+                // Add a new group for each synced group-to-group pair.
+                $groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
+
+                // Update group ids before each save.
                 $fields['customint2'] = $groupid;
+                $fields['customint3'] = $source_groupid;
+
+                // Fetch & cache source group's name.
+                $fields['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
             }
 
-            $fields['customint1'] = $courseid;
             $result = parent::add_instance($course, $fields);
         }
 
-        enrol_metagroup_sync($course->id);
+        enrol_metagroup_sync($course->id, false);
 
         return $result;
     }
@@ -158,9 +197,14 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if (!empty($data->customint2) && $data->customint2 == ENROL_METAGROUP_CREATE_GROUP) {
             $context = context_course::instance($instance->courseid);
             require_capability('moodle/course:managegroups', $context);
-            $groupid = enrol_metagroup_create_new_group($instance->courseid, $data->customint1);
+            
+            $groupid = enrol_metagroup_create_new_group($instance->courseid, $data->customint3);
             $data->customint2 = $groupid;
         }
+        
+        // Keep (frozen) "cache" attributes.
+        // $data->customchar1 = $instance->customchar1;
+        $data->customchar2 = $instance->customchar2;
 
         $result = parent::update_instance($instance, $data);
 
@@ -373,7 +417,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         }
 
         
-        if (!empty($instance->customint1) || $_POST['customint1']) {
+        if ($edit_mode || $creation_stage == 2) {
             // We are within of the process of two-step creation process, thus the user is editing.
 
             $source_courseid = $instance->customint1 ?: $_POST['customint1'];
@@ -396,7 +440,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
                 $options = array(
 
-                    // 'multiple' => true, 
+                    'multiple' => true, 
                     'placeholder' => /* 'Группа-источник' */ get_string('sourcegroup', 'enrol_metagroup'),
                     'noselectionstring' => /* 'Выберите группу…' */ get_string('searchgroup', 'enrol_metagroup'), 
                     'exclude' => $excludelist
@@ -432,13 +476,20 @@ class enrol_metagroup_plugin extends enrol_plugin {
             // • customint4 (updatable) — 1 - обновлять, 0 - не обновлять
 
             $options = [
-                1 => get_string('syncmode_updatable', 'enrol_metagroup') /* 'Обновляемое зеркало группы' */,
-                0 => get_string('syncmode_snapshot', 'enrol_metagroup') /* 'Необновляемая копия группы' */,
+                // 'Обновляемое зеркало группы'.
+                ENROL_METAGROUP_UPDATABLE => get_string('syncmode_updatable', 'enrol_metagroup'),
+                // 'Необновляемая копия группы'.
+                ENROL_METAGROUP_NON_UPDATABLE => get_string('syncmode_snapshot', 'enrol_metagroup'),
             ];
 
             $select = $mform->addElement('select', 'customint4', /* 'Тип синхронизации' */ get_string('syncmode', 'enrol_metagroup'), $options);
             
-            $select->setSelected(1);  // Default when no data is set to form.
+            $select->setSelected(ENROL_METAGROUP_UPDATABLE);  // Default when no data is set to the form element.
+
+            if (0) {
+                // TODO: add setting to hide this option. Отключаение синхронизации может привести к накоплению мусора в курсах.
+                $select->hide();  // ~~
+            }
         }
         // Else: do not show group option until course is selected.
             
@@ -447,7 +498,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         customint2 (target_groupid) — id группы-назначения
         customint3 (source_groupid) — id группы-источника
         customint4 (updatable) — 1 - обновлять, 0 - не обновлять
-        */
+        customchar2 (source_groupname) — имя группы-источника (для констстентности, чтобы избежать накладок при переименовании группы-источника)    */
     }
 
     /**
