@@ -30,10 +30,6 @@ defined('MOODLE_INTERNAL') || die();
 define('ENROL_METAGROUP_CREATE_GROUP', -1);
 
 
-define('ENROL_METAGROUP_UPDATABLE', 1);
-define('ENROL_METAGROUP_NON_UPDATABLE', 0);
-/** Course enrol instance status: disabled but not initialized yet. (used in enrol->status)*/
-define('ENROL_METAGROUP_NON_UPDATABLE_INIT', 2);
 
 /**
  * Meta course enrolment plugin.
@@ -58,16 +54,20 @@ class enrol_metagroup_plugin extends enrol_plugin {
             return format_string($instance->name);
         } else {
             $enrol = $this->get_name();
-            $source_coursename = format_string(get_course_display_name_for_list(get_course($instance->customchar1)));
+            $source_coursename = format_string(get_course_display_name_for_list(get_course($instance->customint1)));
             
-            // Fallback if the group was deleted (ex. manually) but will be restored on next sync.
-            $source_groupname = $instance->customchar2;
             // Get actual group name (since it could be renamed after this enrol method added).
-            $source_groupid = $instance->customint2;
-            $source_groupname = groups_get_group($source_groupid, 'name')->name ?: $source_groupname;
+            $source_groupid = $instance->customint3;
+            $source_groupname = groups_get_group($source_groupid, 'name')->name ?: (
+                // Fallback if the group was deleted (ex. manually).
+                $instance->customchar2 . ' [' . get_string('deleted') . ']'
+            );
             
             $target_groupid = $instance->customint2;
-            $target_groupname = groups_get_group($target_groupid, 'name', MUST_EXIST)->name;
+            $target_groupname = groups_get_group($target_groupid, 'name' /*, MUST_EXIST */)->name ?: (
+                // Fallback if the group was deleted (ex. manually) but will be restored on next sync.
+                '[' . get_string('deleted') . ']'
+            );
 
             $course = $DB->get_record('course', array('id'=>$instance->customint1));
             if ($course) {
@@ -137,14 +137,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @return int id of last instance, null if can not be created
      */
     public function add_instance($course, array $fields = null) {
-        global $CFG;
+        global $CFG, $DB;
 
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
 
-        if (isset($fields['customint4']) && $fields['customint4'] == ENROL_METAGROUP_NON_UPDATABLE) {
-            // On creation of disabled instance, sync should be performed once.
-            $fields['customint4'] = ENROL_METAGROUP_NON_UPDATABLE_INIT;
-        }
 
         // if (isset($fields['customint1'])) {
         //     // Fetch & cache source course's fullname.
@@ -154,11 +150,23 @@ class enrol_metagroup_plugin extends enrol_plugin {
         // Support creating multiple at once (for several source groups from the source course).
         if (isset($fields['customint3']) && is_array($fields['customint3'])) {
             $source_groups = array_unique($fields['customint3']);
-        } else if (isset($fields['customint3'])) {
+        } elseif (isset($fields['customint3'])) {
             $source_groups = array($fields['customint3']);
         } else {
-            $source_groups = array(null); // Strange? Yes, but that's how it's working or instance is not created ever.
+            $source_groups = [];
         }
+
+        // Check if there are enrol duplicates.
+        $already_linked_groups = $DB->get_fieldset_select('enrol', 'customint3', 'enrol = "metagroup" AND courseid = ? AND customint1 = ?', [$fields['courseid'], $fields['customint1'], ]);
+
+        if ($already_linked_groups) {
+            // Do not create enrols for alredy linked groups.
+            $source_groups = array_diff($source_groups, $already_linked_groups);
+        }
+
+        $data = (array)$fields;  // Make updatable copy to keep $fields intact.
+        $result = null;
+
         foreach ($source_groups as $source_groupid) {
             if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_GROUP) {
                 $context = context_course::instance($course->id);
@@ -168,14 +176,14 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 $groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
 
                 // Update group ids before each save.
-                $fields['customint2'] = $groupid;
-                $fields['customint3'] = $source_groupid;
+                $data['customint2'] = $groupid;
+                $data['customint3'] = $source_groupid;
 
                 // Fetch & cache source group's name.
-                $fields['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
+                $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
             }
 
-            $result = parent::add_instance($course, $fields);
+            $result = parent::add_instance($course, $data);
         }
 
         enrol_metagroup_sync($course->id, false);
@@ -193,6 +201,11 @@ class enrol_metagroup_plugin extends enrol_plugin {
         global $CFG;
 
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
+
+        // Convert array with single value to plain value.
+        if (isset($data->customint3) && is_array($data->customint3)) {
+            $data->customint3 = reset($data->customint3);
+        }
 
         if (!empty($data->customint2) && $data->customint2 == ENROL_METAGROUP_CREATE_GROUP) {
             $context = context_course::instance($instance->courseid);
@@ -261,6 +274,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
     }
 
     /**
+     * (Method is not used.)
      * Return an array of valid options for the courses.
      *
      * @param stdClass $instance
@@ -273,25 +287,25 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if ($instance->id) {
             $where = 'WHERE c.id = :courseid';
             $params = array('courseid' => $instance->customint1);
-            $existing = array();
         } else {
             $where = '';
             $params = array();
-            $instanceparams = array('enrol' => 'metagroup', 'courseid' => $instance->courseid);
-            $existing = $DB->get_records('enrol', $instanceparams, '', 'customint1, id');
         }
 
         // TODO: this has to be done via ajax or else it will fail very badly on large sites!
         $courses = array();
         $select = ', ' . context_helper::get_preload_record_columns_sql('ctx');
         $join = "LEFT JOIN {context} ctx ON (ctx.instanceid = c.id AND ctx.contextlevel = :contextlevel)";
+        // Add check: course has at least one non-empty group.
+        $join .= " JOIN {groups} g ON (g.courseid = c.id) ";
+        $join .= " JOIN {groups_members} gm ON (gm.groupid = g.id) ";
 
         $sortorder = 'c.' . $this->get_config('coursesort', 'sortorder') . ' ASC';
 
-        $sql = "SELECT c.id, c.fullname, c.shortname, c.visible $select FROM {course} c $join $where ORDER BY $sortorder";
+        $sql = "SELECT DISTINCT c.id, c.fullname, c.shortname, c.visible $select FROM {course} c $join $where ORDER BY $sortorder";
         $rs = $DB->get_recordset_sql($sql, array('contextlevel' => CONTEXT_COURSE) + $params);
         foreach ($rs as $c) {
-            if ($c->id == SITEID or $c->id == $instance->courseid or isset($existing[$c->id])) {
+            if ($c->id == SITEID or $c->id == $instance->courseid /* or isset($existing[$c->id]) */) {
                 continue;
             }
             context_helper::preload_from_record($c);
@@ -341,7 +355,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         foreach ($groups_with_members as $group) {
             $size = count($group->members);
-            if ($nonempty_only && $size <= 1) {
+            if ($nonempty_only && $size < 1) {
                 continue;
             }
 
@@ -395,10 +409,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
         // Do not allow to link the same course as external.
         $excludelist = array($coursecontext->instanceid);
 
+        // See: "$CFG->libdir/form/course.php", class MoodleQuickForm_course.
         $options = array(
             'requiredcapabilities' => array('enrol/metagroup:selectaslinked'),
             // 'multiple' => empty($instance->id),  // We only accept multiple values on creation.
-            'exclude' => $excludelist
+            'limittoenrolled' => false,  // If true: only "my" ($USER's) courses.
+            'exclude' => $excludelist,
         );
         $mform->addElement('course', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $options);
         $mform->addRule('customint1', get_string('required'), 'required', null, 'client');
@@ -421,8 +437,8 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if ($edit_mode || $creation_stage == 2) {
             // We are within of the process of two-step creation process, thus the user is editing.
 
-            $source_courseid = $instance->customint1 ?: $_POST['customint1'];
             // $source_courseid = $instance->customint1 ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
+            $source_courseid = (isset($instance->customint1) && $instance->customint1) ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
             
 
             // • customint3 (source_groupid) — id группы-источника
@@ -475,23 +491,8 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $mform->addRule('customint2', get_string('required'), 'required', null, 'client');
 
 
-            // • customint4 (updatable) — 1 - обновлять, 0 - не обновлять
 
-            $options = [
-                // 'Обновляемое зеркало группы'.
-                ENROL_METAGROUP_UPDATABLE => get_string('syncmode_updatable', 'enrol_metagroup'),
-                // 'Необновляемая копия группы'.
-                ENROL_METAGROUP_NON_UPDATABLE => get_string('syncmode_snapshot', 'enrol_metagroup'),
-            ];
 
-            $select = $mform->addElement('select', 'customint4', /* 'Тип синхронизации' */ get_string('syncmode', 'enrol_metagroup'), $options);
-            
-            $select->setSelected(ENROL_METAGROUP_UPDATABLE);  // Default when no data is set to the form element.
-
-            if (0) {
-                // TODO: add setting to hide this option. Отключаение синхронизации может привести к накоплению мусора в курсах.
-                $select->hide();  // ~~
-            }
         }
         // Else: do not show group option until course is selected.
             
@@ -499,8 +500,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         customint1 (source_courseid) — id курса-источника
         customint2 (target_groupid) — id группы-назначения
         customint3 (source_groupid) — id группы-источника
-        customint4 (updatable) — 1 - обновлять, 0 - не обновлять
-        customchar2 (source_groupname) — имя группы-источника (для констстентности, чтобы избежать накладок при переименовании группы-источника)    */
+        customchar2 (source_groupname) — имя группы-источника (для консистентности, чтобы избежать накладок при переименовании группы-источника)    */
     }
 
     /**
@@ -540,6 +540,9 @@ class enrol_metagroup_plugin extends enrol_plugin {
         $thiscourseid = $context->instanceid;
 
         if (!empty($data['customint1'])) {
+
+            // TODO: check if course is just selected & has non-empty groups.
+
             $coursesidarr = is_array($data['customint1']) ? $data['customint1'] : [$data['customint1']];
             list($coursesinsql, $coursesinparams) = $DB->get_in_or_equal($coursesidarr, SQL_PARAMS_NAMED, 'metacourseid');
             $coursesrecords = $DB->get_records_select('course', "id {$coursesinsql}",
@@ -559,7 +562,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 if ($DB->record_exists_select('enrol', $existssql, $existsparams)) {
                     // // We may leave right here as further checks do not make sense in case we have existing enrol records
                     // // with the parameters from above.
-                    // $errors['customint1'] = get_string('invalidcourseid1', 'error');
+                    // $errors['customint1'] = get_string('invalidcourseid', 'error');
                     // ???
                 } else {
                     foreach ($coursesrecords as $coursesrecord) {
@@ -571,12 +574,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
                             $errors['customint1'] = get_string('nopermissions', 'error',
                                 'enrol/metagroup:selectaslinked');
                         } else if ($coursesrecord->id == SITEID or $coursesrecord->id == $thiscourseid) {
-                            $errors['customint1'] = get_string('invalidcourseid2', 'error');
+                            $errors['customint1'] = get_string('invalidcourseid', 'error');
                         }
                     }
                 }
             } else {
-                $errors['customint1'] = get_string('invalidcourseid3', 'error');
+                $errors['customint1'] = get_string('invalidcourseid', 'error');
             }
         } else {
             $errors['customint1'] = get_string('required');
