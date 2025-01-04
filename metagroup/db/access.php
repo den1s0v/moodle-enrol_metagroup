@@ -30,26 +30,33 @@ $capabilities = array(
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => array(
             'manager' => CAP_ALLOW,
+            'coursecreator' => CAP_ALLOW,
             'editingteacher' => CAP_ALLOW,
-        )
-    ),
-
-    // select some course as source
+            'teacher' => CAP_ALLOW,
+            )
+        ),
+        
+    // Select some course as source.
     'enrol/metagroup:selectaslinked' => array(
         'captype' => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => array(
             'manager' => CAP_ALLOW,
+            'coursecreator' => CAP_ALLOW,
+            'editingteacher' => CAP_ALLOW,
+            'teacher' => CAP_ALLOW,
         )
     ),
 
-    /* This is used only when sync suspends users instead of full unenrolment */
+    /* This is used only when sync suspends users instead of full unenrolment. */
     'enrol/metagroup:unenrol' => array(
 
         'captype' => 'write',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes' => array(
             'manager' => CAP_ALLOW,
+            'coursecreator' => CAP_ALLOW,
+            'editingteacher' => CAP_ALLOW,
         )
     ),
 );
