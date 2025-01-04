@@ -105,7 +105,7 @@ class enrol_metagroup_handler {
         $sql = "SELECT ue.*, e.status AS enrolstatus
                   FROM {user_enrolments} ue
                   JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol <> 'metagroup' AND e.courseid = :parentcourse AND e.enrol $enabled)
-                  JOIN {groups_members} gm ON (gm.userid = :userid)
+                  JOIN {groups_members} gm ON (gm.userid = ue.userid)
                  WHERE ue.userid = :userid AND gm.groupid = :groupid";
         $parentues = $DB->get_records_sql($sql, $params);
         // Current enrolments for this instance.

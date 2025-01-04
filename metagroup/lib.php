@@ -55,14 +55,14 @@ class enrol_metagroup_plugin extends enrol_plugin {
         } else {
             $enrol = $this->get_name();
             $source_coursename = format_string(get_course_display_name_for_list(get_course($instance->customint1)));
-            
+
             // Get actual group name (since it could be renamed after this enrol method added).
             $source_groupid = $instance->customint3;
             $source_groupname = groups_get_group($source_groupid, 'name')->name ?: (
                 // Fallback if the group was deleted (ex. manually).
                 $instance->customchar2 . ' [' . get_string('deleted') . ']'
             );
-            
+
             $target_groupid = $instance->customint2;
             $target_groupname = groups_get_group($target_groupid, 'name' /*, MUST_EXIST */)->name ?: (
                 // Fallback if the group was deleted (ex. manually) but will be restored on next sync.
@@ -210,11 +210,11 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if (!empty($data->customint2) && $data->customint2 == ENROL_METAGROUP_CREATE_GROUP) {
             $context = context_course::instance($instance->courseid);
             require_capability('moodle/course:managegroups', $context);
-            
+
             $groupid = enrol_metagroup_create_new_group($instance->courseid, $data->customint3);
             $data->customint2 = $groupid;
         }
-        
+
         // Keep (frozen) "cache" attributes.
         // $data->customchar1 = $instance->customchar1;
         $data->customchar2 = $instance->customchar2;
@@ -392,10 +392,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         $creation_mode = empty($instance->id);
         $edit_mode = !$creation_mode;
-        
+
         if ($creation_mode) {
             $creation_stage = 2;
-            
+
             if ( ! $_POST['customint1'] /* || $_POST['reselect_course'] */) {
                 $creation_stage = 1;
             }
@@ -433,13 +433,13 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $mform->addElement('static', '', '', $html_a);
         }
 
-        
+
         if ($edit_mode || $creation_stage == 2) {
             // We are within of the process of two-step creation process, thus the user is editing.
 
             // $source_courseid = $instance->customint1 ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
             $source_courseid = (isset($instance->customint1) && $instance->customint1) ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
-            
+
 
             // • customint3 (source_groupid) — id группы-источника
             {
@@ -495,8 +495,8 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         }
         // Else: do not show group option until course is selected.
-            
-        /* 
+
+        /*
         customint1 (source_courseid) — id курса-источника
         customint2 (target_groupid) — id группы-назначения
         customint3 (source_groupid) — id группы-источника
@@ -512,7 +512,6 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @param context $context The context of the instance we are editing
      * @return array of "element_name"=>"error_description" if there are errors,
      *         or an empty array if everything is OK.
-     * @return void
      */
     public function edit_instance_validation($data, $files, $instance, $context) {
         global $DB;
@@ -594,7 +593,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $typeerrors = $this->validate_param_types($data, $tovalidate);
             $errors = array_merge($errors, $typeerrors);
         }
-        
+
         return $errors;
     }
 
