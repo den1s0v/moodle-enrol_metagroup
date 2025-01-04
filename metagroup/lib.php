@@ -436,6 +436,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         );
         $mform->addElement('course', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $options);
 
+
         // Variant 2, — very slow UI.
         // $available_courses = self::get_course_options($instance, $coursecontext);
 
@@ -511,9 +512,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
 
 
-        }
-        // Else: do not show group option until course is selected.
 
+        } else {
+            // Do not show group options until course is selected, 
+            // but show "Next" button to semantically link/explain the next form appearance.
+            $mform->addElement('submit', 'submitbutton_next', get_string('next'));
+        }
         /*
         customint1 (source_courseid) — id курса-источника
         customint2 (target_groupid) — id группы-назначения
