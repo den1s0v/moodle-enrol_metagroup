@@ -402,6 +402,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         );
         $mform->addElement('course', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $options);
         $mform->addRule('customint1', get_string('required'), 'required', null, 'client');
+        $mform->addHelpButton('customint1', 'linkedcourse', 'enrol_metagroup');
 
         if ($edit_mode || $creation_stage == 2) {
             // Sourse course is know and should not be changed.
@@ -458,6 +459,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
                 $mform->addElement('autocomplete', 'customint3', /* 'Группа-источник' */ get_string('linkedgroup', 'enrol_metagroup'), $groupnames, $options);
                 $mform->addRule('customint3', get_string('required'), 'required', null, 'client');
+                $mform->addHelpButton('customint3', 'linkedgroup', 'enrol_metagroup');
 
                 if (!empty($instance->customint3)) {
                     // Record was loaded from DB, thus the user is editing the form.
