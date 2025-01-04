@@ -55,11 +55,10 @@ if ($ADMIN->fulltree) {
             'sortorder',
             $sortoptions
         ));
-    }
 
-
-    $settings->add($setting = new admin_setting_configcheckbox('enrol_metagroup/limittoenrolled',
+        $settings->add($setting = new admin_setting_configcheckbox('enrol_metagroup/limittoenrolled',
         get_string('limittoenrolled', 'enrol_metagroup'), get_string('limittoenrolled_help', 'enrol_metagroup'), 0));
 
 
+    }
 }
