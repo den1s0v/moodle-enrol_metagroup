@@ -328,12 +328,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @param context $coursecontext
      * @return array
      */
-    protected function get_target_group_options($coursecontext) {
+    protected function get_target_group_options($coursecontext, $source_groups_count = 'many') {
         // $groups = array(0 => get_string('none'));
         $groups = [];
         $courseid = $coursecontext->instanceid;
         if (has_capability('moodle/course:managegroups', $coursecontext)) {
-            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup', 'enrol_metagroup');
+            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_' . $source_groups_count, 'enrol_metagroup');
         }
         foreach (groups_get_all_groups($courseid) as $group) {
             $groups[$group->id] = format_string($group->name, true, array('context' => $coursecontext));
@@ -343,17 +343,34 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
     /**
      * Return an array of valid options for the groups (in source course).
+     * 
+     * Returns all (optionally non-empty) groups in source course, minus groups already used by this plugin.
      *
      * @param context $coursecontext
+     * @param int $courseid source course
+     * @param bool $nonempty_only
+     * @param bool $include_groupsize
      * @return array
      */
-    protected function get_source_group_options($courseid, $nonempty_only = true, $include_groupsize = true) {
+    protected function get_source_group_options($coursecontext, $courseid, $nonempty_only = true, $include_groupsize = true) {
+        global $DB;
 
         $groups_with_members = groups_get_all_groups($courseid, 0, 0, 'g.*', true);
-        
+
+        // Exclude groups that have already linked to this course.
+        $records = $DB->get_records('enrol', [
+            'courseid' => $coursecontext->instanceid,
+            'customint1' => $courseid,
+        ], '', 'customint3');
+        $already_linked_groups = array_keys($records);
+
         $group_options = [];
 
         foreach ($groups_with_members as $group) {
+            if (in_array($group->id, $already_linked_groups)) {
+                continue;
+            }
+
             $size = count($group->members);
             if ($nonempty_only && $size < 1) {
                 continue;
@@ -409,14 +426,28 @@ class enrol_metagroup_plugin extends enrol_plugin {
         // Do not allow to link the same course as external.
         $excludelist = array($coursecontext->instanceid);
 
+        // Variant 1, — course-specific selector UI, reliable enough.
         // See: "$CFG->libdir/form/course.php", class MoodleQuickForm_course.
         $options = array(
             'requiredcapabilities' => array('enrol/metagroup:selectaslinked'),
-            // 'multiple' => empty($instance->id),  // We only accept multiple values on creation.
-            'limittoenrolled' => false,  // If true: only "my" ($USER's) courses.
+            // 'multiple' => false,  // Allow selecting only one course on creation.
+            'limittoenrolled' => get_config('enrol_metagroup', 'limittoenrolled'),  // If true: only "my" ($USER's) courses.
             'exclude' => $excludelist,
         );
         $mform->addElement('course', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $options);
+
+        // Variant 2, — very slow UI.
+        // $available_courses = self::get_course_options($instance, $coursecontext);
+
+        // $options = array(
+        //     // 'requiredcapabilities' => array('enrol/metagroup:selectaslinked'),
+        //     // 'multiple' => empty($instance->id),  // We only accept multiple values on creation.
+        //     // 'limittoenrolled' => true,
+        //     'placeholder' => get_string('course'),
+        //     'exclude' => $excludelist,
+        // );
+        // $mform->addElement('autocomplete', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $available_courses, $options);
+
         $mform->addRule('customint1', get_string('required'), 'required', null, 'client');
         $mform->addHelpButton('customint1', 'linkedcourse', 'enrol_metagroup');
 
@@ -437,7 +468,6 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if ($edit_mode || $creation_stage == 2) {
             // We are within of the process of two-step creation process, thus the user is editing.
 
-            // $source_courseid = $instance->customint1 ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
             $source_courseid = (isset($instance->customint1) && $instance->customint1) ?: (array_key_exists('customint1', $_POST)? $_POST['customint1'] : 0);
 
 
@@ -445,37 +475,26 @@ class enrol_metagroup_plugin extends enrol_plugin {
             {
                 // Show 'autocomplete' element (search & select UI).
 
-                // Get all non-empty groups in source course, minus groups already used by this plugin.
-
-                // Exclude groups that have already linked to this course.
-                $existing = $DB->get_records('enrol', array('enrol' => 'metagroup', 'courseid' => $coursecontext->instanceid), '', 'id, customint3');
-
-                $excludelist = [];
-                foreach ($existing as $existinginstance) {
-                    $excludelist[] = $existinginstance->customint3;
-                }
-
-                $options = array(
-
-                    'multiple' => true, 
-                    'placeholder' => /* 'Группа-источник' */ get_string('sourcegroup', 'enrol_metagroup'),
-                    'noselectionstring' => /* 'Выберите группу…' */ get_string('searchgroup', 'enrol_metagroup'), 
-                    'exclude' => $excludelist
-                );         
-
                 if (empty($instance->customint3)) {
                     // Get all possible options to choose from.
-                    $groupnames = self::get_source_group_options($source_courseid);
+                    $source_groupnames = self::get_source_group_options($coursecontext, $source_courseid);
 
                 } else {
                     // Just one group chosen before.
                     $group = groups_get_group($instance->customint3);
-                    $groupnames = [$group->id => $group->name];
+                    $source_groupnames = [$group->id => $group->name];
                 }
 
-                $mform->addElement('autocomplete', 'customint3', /* 'Группа-источник' */ get_string('linkedgroup', 'enrol_metagroup'), $groupnames, $options);
+                $options = array(
+                    'multiple' => true,
+                    'placeholder' => /* 'Группа-источник' */ get_string('sourcegroup', 'enrol_metagroup'),
+                    'noselectionstring' => $source_groupnames ? /* 'Выберите группу…' */ get_string('searchgroup', 'enrol_metagroup') : /* Группа не найдена */  get_string('nosourcegroups', 'enrol_metagroup'),
+                );
+
+                $mform->addElement('autocomplete', 'customint3', /* 'Группа-источник' */ get_string('linkedgroup', 'enrol_metagroup'), $source_groupnames, $options);
                 $mform->addRule('customint3', get_string('required'), 'required', null, 'client');
                 $mform->addHelpButton('customint3', 'linkedgroup', 'enrol_metagroup');
+
 
                 if (!empty($instance->customint3)) {
                     // Record was loaded from DB, thus the user is editing the form.
@@ -485,10 +504,9 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
             // • customint2 (target_groupid) — id группы-назначения
 
-            $groups = $this->get_target_group_options($coursecontext);
+            $groups = $this->get_target_group_options($coursecontext, (count($source_groupnames) == 1 ? 'one' : 'many'));
 
             $mform->addElement('select', 'customint2', get_string('addgroup', 'enrol_metagroup'), $groups);
-            $mform->addRule('customint2', get_string('required'), 'required', null, 'client');
 
 
 
@@ -540,41 +558,39 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         if (!empty($data['customint1'])) {
 
-            // TODO: check if course is just selected & has non-empty groups.
-
+            // Get courses selected via form.
             $coursesidarr = is_array($data['customint1']) ? $data['customint1'] : [$data['customint1']];
             list($coursesinsql, $coursesinparams) = $DB->get_in_or_equal($coursesidarr, SQL_PARAMS_NAMED, 'metacourseid');
-            $coursesrecords = $DB->get_records_select('course', "id {$coursesinsql}",
-                $coursesinparams, '', 'id,visible');
+
+            // Fetch picked courses & check if these have non-empty groups.
+            $sql = "SELECT DISTINCT c.id, c.visible
+                        FROM {course} c
+                        JOIN {groups} g ON (g.courseid = c.id)
+                        JOIN {groups_members} gm ON (gm.groupid = g.id)
+                        WHERE c.id {$coursesinsql}";
+
+            $existsparams = [] + $coursesinparams;
+            $courseswithgroups = $DB->get_records_sql($sql, $existsparams);
+
+            if (count($courseswithgroups) < count($coursesidarr)) {
+                // Some courses filtered out due to absence of groups.
+                $errors['customint1'] = get_string('cannotfindgroup', 'error');
+                return $errors;
+            }
+
+            $coursesrecords = $courseswithgroups;
 
             if ($coursesrecords) {
-                // Cast NULL to 0 to avoid possible mess with the SQL.
-                $instanceid = $instance->id ?? 0;
-
-                $existssql = "enrol = :metagroup AND courseid = :currentcourseid AND id != :id AND customint1 {$coursesinsql}";
-                $existsparams = [
-                    'metagroup' => 'metagroup',
-                    'currentcourseid' => $thiscourseid,
-                    'id' => $instanceid
-                ];
-                $existsparams += $coursesinparams;
-                if ($DB->record_exists_select('enrol', $existssql, $existsparams)) {
-                    // // We may leave right here as further checks do not make sense in case we have existing enrol records
-                    // // with the parameters from above.
-                    // $errors['customint1'] = get_string('invalidcourseid', 'error');
-                    // ???
-                } else {
-                    foreach ($coursesrecords as $coursesrecord) {
-                        $coursecontext = context_course::instance($coursesrecord->id);
-                        if (!$coursesrecord->visible and !has_capability('moodle/course:viewhiddencourses', $coursecontext)) {
-                            $errors['customint1'] = get_string('nopermissions', 'error',
-                                'moodle/course:viewhiddencourses');
-                        } else if (!has_capability('enrol/metagroup:selectaslinked', $coursecontext)) {
-                            $errors['customint1'] = get_string('nopermissions', 'error',
-                                'enrol/metagroup:selectaslinked');
-                        } else if ($coursesrecord->id == SITEID or $coursesrecord->id == $thiscourseid) {
-                            $errors['customint1'] = get_string('invalidcourseid', 'error');
-                        }
+                foreach ($coursesrecords as $coursesrecord) {
+                    $coursecontext = context_course::instance($coursesrecord->id);
+                    if (!$coursesrecord->visible and !has_capability('moodle/course:viewhiddencourses', $coursecontext)) {
+                        $errors['customint1'] = get_string('nopermissions', 'error',
+                            'moodle/course:viewhiddencourses');
+                    } else if (!has_capability('enrol/metagroup:selectaslinked', $coursecontext)) {
+                        $errors['customint1'] = get_string('nopermissions', 'error',
+                            'enrol/metagroup:selectaslinked');
+                    } else if ($coursesrecord->id == SITEID or $coursesrecord->id == $thiscourseid) {
+                        $errors['customint1'] = get_string('invalidcourseid', 'error');
                     }
                 }
             } else {
