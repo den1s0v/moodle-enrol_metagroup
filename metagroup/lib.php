@@ -28,6 +28,7 @@ defined('MOODLE_INTERNAL') || die();
  * ENROL_METAGROUP_CREATE_GROUP constant for automatically creating a group for a metagroup.
  */
 define('ENROL_METAGROUP_CREATE_GROUP', -1);
+
 /**
  * ENROL_METAGROUP_CREATE_SEPARATE_GROUPS constant for automatically creating a separate group for each of linked groups (on creation with several groups at once).
  */
@@ -145,12 +146,6 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
 
-
-        // if (isset($fields['customint1'])) {
-        //     // Fetch & cache source course's fullname.
-        //     $fields['customchar1'] = format_string(get_course_display_name_for_list(get_course($fields['customint1'])));
-        // }
-
         // Support creating multiple at once (for several source groups from the source course).
         if (isset($fields['customint3']) && is_array($fields['customint3'])) {
             $source_groups = array_unique($fields['customint3']);
@@ -233,7 +228,6 @@ class enrol_metagroup_plugin extends enrol_plugin {
         }
 
         // Keep (frozen) "cache" attributes.
-        // $data->customchar1 = $instance->customchar1;
         $data->customchar2 = $instance->customchar2;
 
         $result = parent::update_instance($instance, $data);
@@ -421,31 +415,20 @@ class enrol_metagroup_plugin extends enrol_plugin {
     public function edit_instance_form($instance, MoodleQuickForm $mform, $coursecontext) {
         global $DB;
 
-        ///
-        // throw new coding_exception('edit_instance_form');
-
-        // $mform->addElement('html', '<pre>'.var_export($_POST, true).'</pre>');
-
-        // $mform->addElement('html', '<pre>'.var_export($instance, true).'</pre>');
-        // $mform->addElement('html', '<pre>'.var_export($mform, true).'</pre>');
-        // $mform->addElement('html', '<pre>'.var_export($coursecontext, true).'</pre>');
-        ///
-
         $creation_mode = empty($instance->id);
         $edit_mode = !$creation_mode;
 
+        // Note the two-step creation scheme via form invalidation and re-rendering with more fields shown.
         if ($creation_mode) {
             $creation_stage = 2;
 
-            if ( ! $_POST['customint1'] /* || $_POST['reselect_course'] */) {
+            if ( ! $_POST['customint1']) {
                 $creation_stage = 1;
             }
 
         } else {
             $creation_stage = 0;
         }
-
-        // $groups = $this->get_target_group_options($coursecontext);
 
         // Do not allow to link the same course as external.
         $excludelist = array($coursecontext->instanceid);
@@ -460,18 +443,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         );
         $mform->addElement('course', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $options);
 
-
-        // Variant 2, — very slow UI.
-        // $available_courses = self::get_course_options($instance, $coursecontext);
-
-        // $options = array(
-        //     // 'requiredcapabilities' => array('enrol/metagroup:selectaslinked'),
-        //     // 'multiple' => empty($instance->id),  // We only accept multiple values on creation.
-        //     // 'limittoenrolled' => true,
-        //     'placeholder' => get_string('course'),
-        //     'exclude' => $excludelist,
-        // );
-        // $mform->addElement('autocomplete', 'customint1', get_string('linkedcourse', 'enrol_metagroup'), $available_courses, $options);
+        // Variant 2: 'autocomplete' — very slow UI. Removed from here.
 
         $mform->addRule('customint1', get_string('required'), 'required', null, 'client');
         $mform->addHelpButton('customint1', 'linkedcourse', 'enrol_metagroup');
@@ -534,15 +506,13 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $mform->addElement('select', 'customint2', get_string('addgroup', 'enrol_metagroup'), $groups);
 
 
-
-
-
         } else {
             // Do not show group options until course is selected, 
             // but show "Next" button to semantically link/explain the next form appearance.
             $mform->addElement('submit', 'submitbutton_next', get_string('next'));
         }
         /*
+        Dev tip: 'enrol' table fields usage:
         customint1 (source_courseid) — id курса-источника
         customint2 (target_groupid) — id группы-назначения
         customint3 (source_groupid) — id группы-источника
@@ -563,24 +533,6 @@ class enrol_metagroup_plugin extends enrol_plugin {
         global $DB;
 
         $errors = array();
-
-        ///
-
-        // $instance->customint2 = 999;
-        // $result = parent::update_instance($instance, $instance);
-            // throw new coding_exception(123);
-
-        // echo('<br><br><br>');
-        // echo('<pre>'.var_export($data, true).'</pre>');
-
-        // if ($data['customint1'] && ! $data['srcgroup']) {
-        //     $errors['customint2x'] = 'Нужно задать группы';
-        // }
-
-        // if ($data['reselect_course']) {
-        //     $errors['customint1'] = 'Вы можете выбрать другой курс';
-        // }
-        ///
 
         $thiscourseid = $context->instanceid;
 

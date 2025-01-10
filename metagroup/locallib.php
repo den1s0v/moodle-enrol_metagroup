@@ -280,7 +280,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     global $CFG, $DB;
     require_once("{$CFG->dirroot}/group/lib.php");
 
-    // purge all roles if metagroup sync disabled, those can be recreated later here in cron
+    // Purge all roles if metagroup sync disabled, those can be recreated later here in cron.
     if (!enrol_is_enabled('metagroup')) {
         if ($verbose) {
             mtrace('Meta sync plugin is disabled, unassigning all plugin roles and stopping.');
@@ -708,18 +708,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
             $ues->close();
         }
     }
-/* 
-    // Finally sync groups.
-    $affectedusers = groups_sync_with_enrolment('metagroup', $courseid);
-    if ($verbose) {
-        foreach ($affectedusers['removed'] as $gm) {
-            mtrace("removing user from group: $gm->userid ==> $gm->courseid - $gm->groupname", 1);
-        }
-        foreach ($affectedusers['added'] as $ue) {
-            mtrace("adding user to group: $ue->userid ==> $ue->courseid - $ue->groupname", 1);
-        }
-    }
- */
+
     if ($verbose) {
         mtrace('...user enrolment synchronisation finished.');
     }
@@ -752,7 +741,8 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
     $a->increment = '';
     $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
 
-    // Check to see if the group name already exists in this course. Add an incremented number if it does.
+    // Check to see if the group name already exists in this course.
+    // Add an incremented number if it does.
     $inc = 1;
     while ($DB->record_exists('groups', array('name' => $groupname, 'courseid' => $courseid))) {
         if ($always_create_new) {
@@ -767,38 +757,6 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
         }
     }
     
-    // Create a new group for the course metagroup sync.
-    $groupdata = new stdClass();
-    $groupdata->courseid = $courseid;
-    $groupdata->name = $groupname;
-    $groupid = groups_create_group($groupdata);
-
-    return $groupid;
-}
-
-/** REMOVE THIS FUNC!
- * Create a new group with the course's name.
- *
- * @param int $courseid
- * @param int $linkedcourseid
- * @return int $groupid Group ID for this cohort.
- */
-function __old_enrol_metagroup_create_new_group($courseid, $linkedcourseid) {
-    global $DB, $CFG;
-
-    require_once($CFG->dirroot.'/group/lib.php');
-
-    $coursename = $DB->get_field('course', 'fullname', array('id' => $linkedcourseid), MUST_EXIST);
-    $a = new stdClass();
-    $a->name = $coursename;
-    $a->increment = '';
-    $inc = 1;
-    $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
-    // Check to see if the group name already exists in this course. Add an incremented number if it does.
-    while ($DB->record_exists('groups', array('name' => $groupname, 'courseid' => $courseid))) {
-        $a->increment = '(' . (++$inc) . ')';
-        $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
-    }
     // Create a new group for the course metagroup sync.
     $groupdata = new stdClass();
     $groupdata->courseid = $courseid;
