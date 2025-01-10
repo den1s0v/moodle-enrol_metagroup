@@ -25,9 +25,13 @@
 defined('MOODLE_INTERNAL') || die();
 
 /**
- * ENROL_METAGROUP_CREATE_GROUP constant for automatically creating a group for a metagroup course.
+ * ENROL_METAGROUP_CREATE_GROUP constant for automatically creating a group for a metagroup.
  */
 define('ENROL_METAGROUP_CREATE_GROUP', -1);
+/**
+ * ENROL_METAGROUP_CREATE_SEPARATE_GROUPS constant for automatically creating a separate group for each of linked groups (on creation with several groups at once).
+ */
+define('ENROL_METAGROUP_CREATE_SEPARATE_GROUPS', -2);
 
 
 
@@ -167,22 +171,35 @@ class enrol_metagroup_plugin extends enrol_plugin {
         $data = (array)$fields;  // Make updatable copy to keep $fields intact.
         $result = null;
 
+        $target_groupid = $fields['customint2'];
+
+        if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_GROUP) {
+            // Create one dedicated group for all source groups as requested.
+            $context = context_course::instance($course->id);
+            require_capability('moodle/course:managegroups', $context);
+
+            // Add a new group with the name of linked course.
+            $target_groupid = enrol_metagroup_create_new_group($course->id, null, get_course($fields['customint1'])->shortname);
+        }
+
         foreach ($source_groups as $source_groupid) {
-            if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_GROUP) {
+            if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_SEPARATE_GROUPS) {
+                // Create saparate groups for each source group as requested.
                 $context = context_course::instance($course->id);
                 require_capability('moodle/course:managegroups', $context);
 
                 // Add a new group for each synced group-to-group pair.
-                $groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
-
-                // Update group ids before each save.
-                $data['customint2'] = $groupid;
-                $data['customint3'] = $source_groupid;
-
-                // Fetch & cache source group's name.
-                $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
+                $target_groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
             }
+            
+            // Update group id before each save.
+            $data['customint2'] = $target_groupid;
+            $data['customint3'] = $source_groupid;
 
+            // Fetch & cache source group's name.
+            $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
+
+            // Add enrolling method to the course: one for each linked group.
             $result = parent::add_instance($course, $data);
         }
 
@@ -326,15 +343,22 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * Return an array of valid options for the groups (to whose members may be added).
      *
      * @param context $coursecontext
+     * @param string $source_groups_count 'many' to add extra menu option "Create new group for each one" (default), or 'one' for just one option "Create new group".
      * @return array
      */
     protected function get_target_group_options($coursecontext, $source_groups_count = 'many') {
         // $groups = array(0 => get_string('none'));
         $groups = [];
         $courseid = $coursecontext->instanceid;
+
         if (has_capability('moodle/course:managegroups', $coursecontext)) {
-            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_' . $source_groups_count, 'enrol_metagroup');
+            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_one', 'enrol_metagroup');
+
+            if ($source_groups_count == 'many') {             
+                $groups[ENROL_METAGROUP_CREATE_SEPARATE_GROUPS] = get_string('creategroup_many', 'enrol_metagroup');
+            }
         }
+
         foreach (groups_get_all_groups($courseid) as $group) {
             $groups[$group->id] = format_string($group->name, true, array('context' => $coursecontext));
         }

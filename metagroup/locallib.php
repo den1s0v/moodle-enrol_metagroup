@@ -728,19 +728,25 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 }
 
 /**
- * Create a new group with the other group's name.
- * If such a group does already exist (with the same name) and `$always_create_new` is false, returns id of existing group.
+ * Create a new group with the other group's name (group name is fetched unless $explicit_name is given).
+ * If such a group does already exist (with the same name) and `$always_create_new` is `false`, returns id of existing group.
  *
- * @param int $courseid 
- * @param int $linkedgroupid
+ * @param int $courseid this course to create group in.
+ * @param int $linkedgroupid optional id of a group in another course.
+ * @param string $explicit_name optional but required if $linkedgroupid is not provided.
+ * @param bool $always_create_new if `false` and a group with the same name already exists, its ID will just be returned. If `true` (default), a new group is created and renamed in case of name clash.
  * @return int $groupid ID of fresh group.
  */
-function enrol_metagroup_create_new_group($courseid, $linkedgroupid, $always_create_new = true) {
+function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $explicit_name = null, $always_create_new = true) {
     global $DB, $CFG;
 
     require_once($CFG->dirroot.'/group/lib.php');
 
-    $groupname = groups_get_group($linkedgroupid, 'name', MUST_EXIST)->name;
+    if ($explicit_name)
+        $groupname = $explicit_name;
+    else
+        $groupname = groups_get_group($linkedgroupid, 'name', MUST_EXIST)->name;
+
     $a = new stdClass();
     $a->name = $groupname;
     $a->increment = '';
