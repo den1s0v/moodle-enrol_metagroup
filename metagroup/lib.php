@@ -422,7 +422,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if ($creation_mode) {
             $creation_stage = 2;
 
-            if ( ! $_POST['customint1']) {
+            if (!isset($_POST['customint1'])) {
                 $creation_stage = 1;
             }
 
