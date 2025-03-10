@@ -56,4 +56,17 @@ $observers = array(
         'eventname'   => '\core\event\enrol_instance_updated',
         'callback'    => 'enrol_metagroup_observer::enrol_instance_updated',
     ),
+
+    array(
+        'eventname' => '\core\event\group_member_added',
+        'callback' => 'enrol_metagroup_observer::group_member_added',
+    ),
+    array(
+        'eventname' => '\core\event\group_member_removed',
+        'callback' => 'enrol_metagroup_observer::group_member_removed',
+    ),
+    array(
+        'eventname' => '\core\event\group_deleted',
+        'callback' => 'enrol_metagroup_observer::group_deleted',
+    ),
 );

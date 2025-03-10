@@ -72,9 +72,9 @@ class enrol_metagroup_handler {
      * Synchronise enrolments of specific user in given instance as fast as possible.
      *
      * All roles are removed if the metagroup plugin disabled.
-     * 
+     *
      * Notes:
-     * This methods ensures this user has required enrolment, roles and target-group membership. 
+     * This methods ensures this user has required enrolment, roles and target-group membership.
      * If the user had to be removed from any other groups, this will not be handled here.
      *
      * @static
@@ -177,12 +177,12 @@ class enrol_metagroup_handler {
                 $ue->timeend = $parenttimeend;
 
                 // Ensure user is in target group.
-                if ($instance->customint2 && 
+                if ($instance->customint2 &&
                     !groups_is_member($instance->customint2, $userid)) {
                     // Note: if the group is absent, this will fail; new group will be created on full sync.
                     groups_add_member($instance->customint2, $userid, 'enrol_metagroup', $instance->id);
                 }
-    
+
             }
         } else {
             $plugin->enrol_user($instance, $userid, NULL, (int)$parenttimestart, (int)$parenttimeend, $parentstatus);
@@ -297,6 +297,50 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         mtrace('Starting user enrolment synchronisation (enrol_metagroup) ...');
     }
 
+    // Получаем настройку поведения при потере связи с родительским курсом.
+    $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
+
+    // Обработка случаев, когда родительский курс или группа удалены.
+    $sql = "SELECT e.id AS enrolid, e.courseid, e.customint1 AS parentcourseid, e.customint3 AS sourcegroupid
+            FROM {enrol} e
+            LEFT JOIN {course} c ON c.id = e.customint1
+            LEFT JOIN {groups} g ON g.id = e.customint3
+            WHERE e.enrol = 'metagroup'
+            AND (c.id IS NULL OR g.id IS NULL)";
+    $rs = $DB->get_recordset_sql($sql);
+
+    foreach ($rs as $record) {
+        // Применяем настройку lostlinkaction.
+        switch ($lostlinkaction) {
+            case ENROL_EXT_REMOVED_KEEP:
+                // Ничего не делаем, студенты остаются активными
+                break;
+
+            case ENROL_EXT_REMOVED_SUSPENDNOROLES:
+                // Заблокировать студентов.
+                $DB->set_field('user_enrolments', 'status', ENROL_USER_SUSPENDED, array('enrolid' => $record->enrolid));
+                role_unassign_all(array('component' => 'enrol_metagroup', 'itemid' => $record->enrolid));
+                break;
+
+            case ENROL_EXT_REMOVED_UNENROL:
+                // Удалить студентов
+                $plugin = enrol_get_plugin('metagroup');
+                $plugin->delete_instance($record);
+                break;
+        }
+
+        // Удаляем пустые группы, если включена соответствующая настройка.
+        if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2 /* target group is in use */) {
+            $groupmembers = $DB->count_records('groups_members', array('groupid' => $record->customint2));
+            if ($groupmembers == 0) {
+                groups_delete_group($record->customint2);
+            }
+        }
+    }
+    $rs->close();
+
+    // End of new fragment.
+
     $instances = array(); // Cache enrol instances.
     $local_groups = array(); // Cache groups instances.
 
@@ -310,7 +354,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     $allroles = get_all_roles();
 
 
-    // Iterate through all not enrolled yet users (not in the course or/and not in target group). 
+    // Iterate through all not enrolled yet users (not in the course or/and not in target group).
     // For each active enrolment of each user find the minimum
     // enrolment startdate and maximum enrolment enddate.
     // This SQL relies on the fact that ENROL_USER_ACTIVE < ENROL_USER_SUSPENDED
@@ -323,7 +367,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
     $params['courseid'] = $courseid;
     $params['enrolstatus'] = ENROL_INSTANCE_ENABLED;
-    $sql = "SELECT pue.userid, e.id AS enrolid, 
+    $sql = "SELECT pue.userid, e.id AS enrolid,
                 ue.id AS ue_id, gm.id AS gm_id,
                 MIN(pue.status + pe.status) AS status,
                 MIN(CASE WHEN (pue.status + pe.status = 0) THEN pue.timestart ELSE 9999999999 END) AS timestart,
@@ -389,7 +433,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         if (!$ue->gm_id && $instance->customint2) {
             // Not a group member yet.
             $gid = $instance->customint2;
-            
+
             // First, ensure that target group exists.
             if (isset($local_groups[$gid])) {
                 $group = $local_groups[$gid];
@@ -397,7 +441,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
                 if (!$group = groups_get_group($gid)) {
                     // Add new group.
                     $new_groupid = enrol_metagroup_create_new_group($instance->courseid, $instance->customint3, false);
-                    
+
                     if ($new_groupid != $gid) {
                         // Update instance with new target group id!
                         $DB->update_record('enrol', (object)['id' => $instance->id, 'customint2' => $new_groupid]);
@@ -440,7 +484,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
                       JOIN {groups_members} xpgm ON (xpgm.userid = xpue.userid)
                    ) ON (xpe.courseid = e.customint1 AND xpue.userid = ue.userid AND xpgm.groupid = e.customint3)
              WHERE xpue.userid IS NULL OR (gm.id IS NOT NULL AND e.customint2 <> gm.groupid)";
-    
+
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
     foreach($rs as $ue) {
@@ -748,7 +792,7 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
         if ($always_create_new) {
             $a->increment = '(' . (++$inc) . ')';
             $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
-            
+
         } else {
             // Return id.
             // TODO: refactor out extra DB query.
@@ -756,7 +800,7 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
             return $groupid;
         }
     }
-    
+
     // Create a new group for the course metagroup sync.
     $groupdata = new stdClass();
     $groupdata->courseid = $courseid;
