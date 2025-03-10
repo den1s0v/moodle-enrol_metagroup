@@ -230,4 +230,54 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
 
         return true;
     }
+
+    public static function group_member_added(\core\event\group_member_added $event)
+    {
+        global $DB;
+
+        if (!enrol_is_enabled('metagroup')) {
+            // This is slow, let enrol_metagroup_sync() deal with disabled plugin.
+            return true;
+        }
+
+        // Проверяем, связана ли группа с метагруппой.
+        $enrol = $DB->get_record('enrol', array('customint3' => $event->objectid, 'enrol' => 'metagroup'));
+        if ($enrol) {
+            // Синхронизируем зачисления.
+            enrol_metagroup_sync($enrol->courseid);
+        }
+    }
+
+    public static function group_member_removed(\core\event\group_member_removed $event)
+    {
+        global $DB;
+
+        if (!enrol_is_enabled('metagroup')) {
+            // This is slow, let enrol_metagroup_sync() deal with disabled plugin.
+            return true;
+        }
+
+        // Проверяем, связана ли группа с метагруппой.
+        $enrol = $DB->get_record('enrol', array('customint3' => $event->objectid, 'enrol' => 'metagroup'));
+        if ($enrol) {
+            // Синхронизируем зачисления.
+            enrol_metagroup_sync($enrol->courseid);
+        }
+    }
+
+    public static function group_deleted(\core\event\group_deleted $event)
+    {
+        global $DB;
+
+        if (!enrol_is_enabled('metagroup')) {
+            // This is slow, let enrol_metagroup_sync() deal with disabled plugin.
+            return true;
+        }
+
+        // Проверяем, связана ли удалённая группа с метагруппой.
+        $enrol = $DB->get_record('enrol', array('customint3' => $event->objectid, 'enrol' => 'metagroup'));
+        if ($enrol) {
+            enrol_metagroup_deal_with_lost_link($enrol);
+        }
+    }
 }
