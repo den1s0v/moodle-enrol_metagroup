@@ -42,6 +42,25 @@ if ($ADMIN->fulltree) {
         );
         $settings->add(new admin_setting_configselect('enrol_metagroup/unenrolaction', get_string('extremovedaction', 'enrol'), get_string('extremovedaction_help', 'enrol'), ENROL_EXT_REMOVED_SUSPENDNOROLES, $options));
 
+        $settings->add(new admin_setting_configselect(
+            'enrol_metagroup/lostlinkaction',
+            get_string('lostlinkaction', 'enrol_metagroup'),
+            get_string('lostlinkaction_desc', 'enrol_metagroup'),
+            ENROL_EXT_REMOVED_SUSPENDNOROLES, // По умолчанию: оставить студентов, но заблокировать.
+            array(
+                ENROL_EXT_REMOVED_KEEP => get_string('lostlinkaction_keep', 'enrol_metagroup'), // Оставить активными.
+                ENROL_EXT_REMOVED_SUSPENDNOROLES => get_string('lostlinkaction_suspend', 'enrol_metagroup'), // Заблокировать.
+                ENROL_EXT_REMOVED_UNENROL => get_string('lostlinkaction_unenrol', 'enrol_metagroup'), // Удалить.
+            )
+        ));
+
+        $settings->add(new admin_setting_configcheckbox(
+            'enrol_metagroup/deleteemptygroups',
+            get_string('deleteemptygroups', 'enrol_metagroup'),
+            get_string('deleteemptygroups_desc', 'enrol_metagroup'),
+            0 // По умолчанию: не удалять пустые группы
+        ));
+
         $sortoptions = array(
             'sortorder' => new lang_string('sort_sortorder', 'admin'),
             'fullname' => new lang_string('sort_fullname', 'admin'),

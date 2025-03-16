@@ -283,7 +283,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     // Purge all roles if metagroup sync disabled, those can be recreated later here in cron.
     if (!enrol_is_enabled('metagroup')) {
         if ($verbose) {
-            mtrace('Meta sync plugin is disabled, unassigning all plugin roles and stopping.');
+            mtrace('Metagroup plugin is disabled, unassigning all plugin roles and stopping.');
         }
         role_unassign_all(array('component'=>'enrol_metagroup'));
         return 2;
@@ -300,27 +300,30 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     // Получаем настройку поведения при потере связи с родительским курсом.
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
-    // Обработка случаев, когда родительский курс или группа удалены.
-    $sql = "SELECT e.id AS enrolid, e.courseid, e.customint1 AS parentcourseid, e.customint3 AS sourcegroupid
-            FROM {enrol} e
-            LEFT JOIN {course} c ON c.id = e.customint1
-            LEFT JOIN {groups} g ON g.id = e.customint3
-            WHERE e.enrol = 'metagroup'
-            AND (c.id IS NULL OR g.id IS NULL)";
-    $rs = $DB->get_recordset_sql($sql);
+    if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
+        
+        // Обработка случаев, когда родительский курс или группа удалены.
+        $sql = "SELECT e.id AS enrolid, e.courseid, e.customint1 AS parentcourseid, e.customint3 AS sourcegroupid
+                FROM {enrol} e
+                LEFT JOIN {course} c ON c.id = e.customint1
+                LEFT JOIN {groups} g ON g.id = e.customint3
+                WHERE e.enrol = 'metagroup'
+                AND (c.id IS NULL OR g.id IS NULL)";
+        $rs = $DB->get_recordset_sql($sql);
 
-    foreach ($rs as $record) {
-        enrol_metagroup_deal_with_lost_link($record);
+        foreach ($rs as $record) {
+            enrol_metagroup_deal_with_lost_link($record);
 
-        // Удаляем пустые группы, если включена соответствующая настройка.
-        if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2 /* target group is in use */) {
-            $groupmembers = $DB->count_records('groups_members', array('groupid' => $record->customint2));
-            if ($groupmembers == 0) {
-                groups_delete_group($record->customint2);
+            // Удаляем пустые группы, если включена соответствующая настройка.
+            if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2 /* target group is in use */) {
+                $groupmembers = $DB->count_records('groups_members', array('groupid' => $record->customint2));
+                if ($groupmembers == 0) {
+                    groups_delete_group($record->customint2);
+                }
             }
         }
+        $rs->close();
     }
-    $rs->close();
 
     // End of new fragment.
 
