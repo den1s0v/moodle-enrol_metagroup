@@ -52,7 +52,7 @@ class enrol_metagroup_sync extends \core\task\scheduled_task {
     public function execute() {
         global $CFG;
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
-        enrol_metagroup_sync();
+        enrol_metagroup_sync(null, true);
     }
 
 }
