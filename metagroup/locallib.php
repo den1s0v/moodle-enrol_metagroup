@@ -301,9 +301,9 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
     if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
-        
+
         // Обработка случаев, когда родительский курс или группа удалены.
-        $sql = "SELECT e.id AS enrolid, e.courseid, e.customint1 AS parentcourseid, e.customint3 AS sourcegroupid
+        $sql = "SELECT e.*
                 FROM {enrol} e
                 LEFT JOIN {course} c ON c.id = e.customint1
                 LEFT JOIN {groups} g ON g.id = e.customint3
@@ -314,8 +314,8 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         foreach ($rs as $record) {
             enrol_metagroup_deal_with_lost_link($record);
 
-            // Удаляем пустые группы, если включена соответствующая настройка.
-            if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2 /* target group is in use */) {
+            // Удаляем пустые группы, если включена соответствующая настройка, и целевая группа присутствует.
+            if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2) {
                 $groupmembers = $DB->count_records('groups_members', array('groupid' => $record->customint2));
                 if ($groupmembers == 0) {
                     groups_delete_group($record->customint2);
@@ -752,7 +752,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
  * @param object $enrol metagroup enrol record.
  */
 function enrol_metagroup_deal_with_lost_link($enrol) {
-    global $DB, $CFG;
+    global $DB;
     if ($enrol) {
         // Применяем настройку lostlinkaction.
         $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
@@ -762,15 +762,28 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
                 break;
 
             case ENROL_EXT_REMOVED_SUSPENDNOROLES:
-                // Заблокировать студентов.
+                // Заблокировать студентов и отозвать роли.
                 $DB->set_field('user_enrolments', 'status', ENROL_USER_SUSPENDED, array('enrolid' => $enrol->id));
                 role_unassign_all(array('component' => 'enrol_metagroup', 'itemid' => $enrol->id));
                 break;
 
             case ENROL_EXT_REMOVED_UNENROL:
-                // Удалить студентов.
                 $plugin = enrol_get_plugin('metagroup');
-                $plugin->delete_instance($enrol);
+
+                // Удалить способ зачисления (и студентов из курса); в результате группа должна очиститься.
+                // $plugin->delete_instance($enrol);
+
+                // Заблокировать способ зачисления и удалить всех студентов из курса.
+                $plugin->update_status($enrol, ENROL_INSTANCE_DISABLED);
+
+                // $target_group = groups_get_group($enrol->customint2);
+                $target_group_members = groups_get_members($enrol->customint2);
+                if ($target_group_members) {
+                    foreach($target_group_members as $student)
+                    {
+                        $plugin->unenrol_user($enrol, $student->id);
+                    }
+                }
                 break;
         }
     }

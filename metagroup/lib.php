@@ -59,26 +59,27 @@ class enrol_metagroup_plugin extends enrol_plugin {
             return format_string($instance->name);
         } else {
             $enrol = $this->get_name();
-            $source_coursename = format_string(get_course_display_name_for_list(get_course($instance->customint1)));
 
             // Get actual group name (since it could be renamed after this enrol method added).
             $source_groupid = $instance->customint3;
-            $source_groupname = groups_get_group($source_groupid, 'name')->name ?: (
+            $source_group = groups_get_group($source_groupid, 'name');
+            $source_groupname = $source_group ? $source_group->name : (
                 // Fallback if the group was deleted (ex. manually).
                 $instance->customchar2 . ' [' . get_string('deleted') . ']'
             );
 
             $target_groupid = $instance->customint2;
-            $target_groupname = groups_get_group($target_groupid, 'name' /*, MUST_EXIST */)->name ?: (
+            $target_group = groups_get_group($target_groupid, 'name' /*, IGNORE_MISSING */);
+            $target_groupname = $target_group ? $target_group->name : (
                 // Fallback if the group was deleted (ex. manually) but will be restored on next sync.
                 '[' . get_string('deleted') . ']'
             );
 
-            $course = $DB->get_record('course', array('id'=>$instance->customint1));
+            $course = get_course($instance->customint1);
             if ($course) {
                 $coursename = format_string(get_course_display_name_for_list($course));
             } else {
-                // Use course id, if course is deleted.
+                // Use course id, if the course has been deleted.
                 $coursename = $instance->customint1;
             }
             return get_string('defaultenrolnametext', 'enrol_' . $enrol, [
@@ -186,7 +187,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 // Add a new group for each synced group-to-group pair.
                 $target_groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
             }
-            
+
             // Update group id before each save.
             $data['customint2'] = $target_groupid;
             $data['customint3'] = $source_groupid;
@@ -348,7 +349,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
         if (has_capability('moodle/course:managegroups', $coursecontext)) {
             $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_one', 'enrol_metagroup');
 
-            if ($source_groups_count == 'many') {             
+            if ($source_groups_count == 'many') {
                 $groups[ENROL_METAGROUP_CREATE_SEPARATE_GROUPS] = get_string('creategroup_many', 'enrol_metagroup');
             }
         }
@@ -361,7 +362,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
     /**
      * Return an array of valid options for the groups (in source course).
-     * 
+     *
      * Returns all (optionally non-empty) groups in source course, minus groups already used by this plugin.
      *
      * @param context $coursecontext
@@ -479,7 +480,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 } else {
                     // Just one group chosen before.
                     $group = groups_get_group($instance->customint3);
-                    $source_groupnames = [$group->id => $group->name];
+                    if ($group)
+                        $source_groupnames = [$group->id => $group->name];
+                    else
+                        $source_groupnames = [/* 0 => ('not found') */];
                 }
 
                 $options = array(
@@ -499,7 +503,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 }
             }
 
-            // • customint2 (target_groupid) — id группы-назначения
+            // • customint2 (target_groupid) — id группы-назначения (эта группа всегда есть, не может быть пустым или 0).
 
             $groups = $this->get_target_group_options($coursecontext, (count($source_groupnames) == 1 ? 'one' : 'many'));
 
@@ -507,14 +511,14 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
 
         } else {
-            // Do not show group options until course is selected, 
+            // Do not show group options until course is selected,
             // but show "Next" button to semantically link/explain the next form appearance.
             $mform->addElement('submit', 'submitbutton_next', get_string('next'));
         }
         /*
         Dev tip: 'enrol' table fields usage:
         customint1 (source_courseid) — id курса-источника
-        customint2 (target_groupid) — id группы-назначения
+        customint2 (target_groupid) — id группы-назначения (эта группа всегда есть, не может быть пустым или 0)
         customint3 (source_groupid) — id группы-источника
         customchar2 (source_groupname) — имя группы-источника (для консистентности, чтобы избежать накладок при переименовании группы-источника)    */
     }
