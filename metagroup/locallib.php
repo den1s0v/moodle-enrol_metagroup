@@ -471,6 +471,9 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
                    ) ON (xpe.courseid = e.customint1 AND xpue.userid = ue.userid AND xpgm.groupid = e.customint3)
              WHERE xpue.userid IS NULL OR (gm.id IS NOT NULL AND e.customint2 <> gm.groupid)";
 
+    // debugging($sql);
+    // debugging(var_export($params, true));
+
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
     foreach($rs as $ue) {
@@ -484,6 +487,8 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         if ($ue->bad_groupid) {
             // Remove group member.
             $ok = groups_remove_member($ue->bad_groupid, $ue->userid);
+
+            // ?? // user_not_supposed_to_be_here() ??
 
             if ($verbose) {
                 mtrace("  removed user from group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
@@ -526,6 +531,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     }
 
 
+    //*
     // Update status - metagroup enrols are ignored to avoid recursion.
     // Note the trick here is that the active enrolment and instance constants have value 0.
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
@@ -605,6 +611,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
     }
     $rs->close();
+    // */
 
 
     // Now assign all necessary roles (currently absent).
@@ -758,7 +765,7 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
         $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
         switch ($lostlinkaction) {
             case ENROL_EXT_REMOVED_KEEP:
-                // Ничего не делаем.
+                // Ничего не делаем ().
                 break;
 
             case ENROL_EXT_REMOVED_SUSPENDNOROLES:
