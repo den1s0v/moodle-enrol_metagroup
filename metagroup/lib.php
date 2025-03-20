@@ -245,13 +245,15 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @param int $newstatus ENROL_INSTANCE_ENABLED, ENROL_INSTANCE_DISABLED
      * @return void
      */
-    public function update_status($instance, $newstatus) {
+    public function update_status($instance, $newstatus, $invoke_sync = true) {
         global $CFG;
 
         parent::update_status($instance, $newstatus);
 
-        require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
-        enrol_metagroup_sync($instance->courseid);
+        if ($invoke_sync) {
+            require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
+            enrol_metagroup_sync($instance->courseid);
+        }
     }
 
     /**

@@ -267,6 +267,26 @@ class enrol_metagroup_handler {
             debugging('Unknown unenrol action '.$unenrolaction);
         }
     }
+
+    /**
+     * Delete group if it is empty and the plugin is configured to do so.
+     *
+     * @param int $groupid id group to delete if it is empty
+     */
+    public static function delete_empty_group_as_configured($groupid, $verbose = false) {
+        global $DB;
+
+        // Удаляем пустую группу, если включена соответствующая настройка, и целевая группа присутствует.
+        if ($groupid && get_config('enrol_metagroup', 'deleteemptygroups')) {
+            $groupmembers = $DB->count_records('groups_members', array('groupid' => $groupid));
+            if ($groupmembers == 0) {
+                groups_delete_group($groupid);
+                if ($verbose) {
+                    mtrace("  removed empty group: $groupid .");
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -300,29 +320,29 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     // Получаем настройку поведения при потере связи с родительским курсом.
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
-    if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
+    if (true /* $lostlinkaction != ENROL_EXT_REMOVED_KEEP */) {
 
         // Обработка случаев, когда родительский курс или группа удалены.
-        $sql = "SELECT e.*
+        $sql = "SELECT distinct e.*
                 FROM {enrol} e
                 LEFT JOIN {course} c ON c.id = e.customint1
                 LEFT JOIN {groups} g ON g.id = e.customint3
                 WHERE e.enrol = 'metagroup'
                 AND (c.id IS NULL OR g.id IS NULL)";
-        $rs = $DB->get_recordset_sql($sql);
+
+        $rs = $DB->get_records_sql($sql);
 
         foreach ($rs as $record) {
+            mtrace('dealing with a lost link... ' /* . var_export($record) */);
             enrol_metagroup_deal_with_lost_link($record);
 
-            // Удаляем пустые группы, если включена соответствующая настройка, и целевая группа присутствует.
-            if (get_config('enrol_metagroup', 'deleteemptygroups') && $record->customint2) {
-                $groupmembers = $DB->count_records('groups_members', array('groupid' => $record->customint2));
-                if ($groupmembers == 0) {
-                    groups_delete_group($record->customint2);
-                }
+            if ($lostlinkaction != ENROL_EXT_REMOVED_UNENROL) {
+                // Удаляем пустые группы, если включена соответствующая настройка, и целевая группа присутствует.
+                enrol_metagroup_handler::delete_empty_group_as_configured($record->customint2, true);
             }
         }
-        $rs->close();
+        // $rs->close();
+        mtrace('Done dealing with a lost links.');
     }
 
     // End of new fragment.
@@ -485,14 +505,23 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         $instance = $instances[$ue->enrolid];
 
         if ($ue->bad_groupid) {
-            // Remove group member.
-            $ok = groups_remove_member($ue->bad_groupid, $ue->userid);
+            // Move group member from old group to new one.
 
-            // ?? // user_not_supposed_to_be_here() ??
+            $ok = groups_add_member($instance->customint2, $ue->userid, 'enrol_metagroup', $instance->id);
+
+            if ($verbose) {
+                mtrace("  added user to group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
+            }
+
+
+            $ok = groups_remove_member($ue->bad_groupid, $ue->userid);
 
             if ($verbose) {
                 mtrace("  removed user from group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
             }
+            echo(" <br><br><br><br><br><br> removed user from group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
+
+            enrol_metagroup_handler::delete_empty_group_as_configured($ue->bad_groupid, $verbose);
         }
 
         if (!$ue->parent_enrolid) {
@@ -781,7 +810,7 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
                 // $plugin->delete_instance($enrol);
 
                 // Заблокировать способ зачисления и удалить всех студентов из курса.
-                $plugin->update_status($enrol, ENROL_INSTANCE_DISABLED);
+                $plugin->update_status($enrol, ENROL_INSTANCE_DISABLED, false);
 
                 // $target_group = groups_get_group($enrol->customint2);
                 $target_group_members = groups_get_members($enrol->customint2);
