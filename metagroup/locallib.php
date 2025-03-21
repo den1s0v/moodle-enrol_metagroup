@@ -492,11 +492,11 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
     // Unenrol / remove from group as necessary - ignore enabled flag, we want to get rid of existing enrols in any case.
     // Added: restrict `ue`s to members source group (and group membership should be originated in corresponding enrol instance).
-    // A returned record should have: parent_enrolid == NULL (means the need to unenrol) and/or bad_groupid != NULL (means the need to remove from that group).
+    // A returned record should have: parent_enrolid == NULL (means the need to unenrol) and/or old_groupid != NULL (means the need to remove from that group).
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
     $params['courseid'] = $courseid;
-    $sql = "SELECT ue.*, xpe.id AS parent_enrolid, gm.groupid AS bad_groupid
+    $sql = "SELECT ue.*, xpe.id AS parent_enrolid, gm.groupid AS old_groupid
               FROM {user_enrolments} ue
               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
          LEFT JOIN {groups_members} gm ON (gm.userid = ue.userid AND gm.itemid = e.id)
@@ -524,24 +524,24 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
         $instance = $instances[$ue->enrolid];
 
-        if ($ue->bad_groupid) {
+        if ($ue->old_groupid && $ue->old_groupid != $instance->customint2) {
             // Move group member from old group to new one.
 
             $ok = groups_add_member($instance->customint2, $ue->userid, 'enrol_metagroup', $instance->id);
 
             if ($verbose) {
-                mtrace("  added user to group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
+                mtrace("  added user to group: $ue->userid ==> $instance->customint2 in course $instance->courseid (success: $ok).");
             }
 
 
-            $ok = groups_remove_member($ue->bad_groupid, $ue->userid);
-
+            $ok = groups_remove_member($ue->old_groupid, $ue->userid);
             if ($verbose) {
-                mtrace("  removed user from group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
+                mtrace("  removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
             }
-            echo(" <br><br><br><br><br><br> removed user from group: $ue->userid ==> $ue->bad_groupid in course $instance->courseid (success: $ok).");
+            ///
+            echo(" <br> removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
 
-            enrol_metagroup_handler::delete_empty_group_as_configured($ue->bad_groupid, $verbose);
+            enrol_metagroup_handler::delete_empty_group_as_configured($ue->old_groupid, $verbose);
         }
 
         if (!$ue->parent_enrolid) {
@@ -595,6 +595,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     //
     // The last two case statements in the HAVING clause are designed to ignore any inactive child records when calculating
     // the start and end time.
+    // Added: restrict `ue`s to members source group (that is set in metagroup enrol instance).
     $sql = "SELECT ue.userid, ue.enrolid,
                    MIN(xpue.status + xpe.status) AS pstatus,
                    MIN(CASE WHEN (xpue.status + xpe.status = 0) THEN xpue.timestart ELSE 9999999999 END) AS ptimestart,
@@ -606,6 +607,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
               JOIN {user_enrolments} xpue ON (xpue.userid = ue.userid)
               JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol <> 'metagroup'
                    AND xpe.enrol $enabled AND xpe.courseid = e.customint1)
+              JOIN {groups_members} pgm ON (pgm.userid = ue.userid AND e.customint3 = pgm.groupid)
           GROUP BY ue.userid, ue.enrolid
             HAVING (MIN(xpue.status + xpe.status) = 0 AND MIN(ue.status) > 0)
                    OR (MIN(xpue.status + xpe.status) > 0 AND MIN(ue.status) = 0)
