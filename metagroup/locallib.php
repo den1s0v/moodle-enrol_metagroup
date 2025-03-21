@@ -317,6 +317,9 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         mtrace('Starting user enrolment synchronisation (enrol_metagroup) ...');
     }
 
+    $enrols_having_link_lost = [];
+
+
     // Получаем настройку поведения при потере связи с родительским курсом.
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
@@ -331,18 +334,26 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
                 AND (c.id IS NULL OR g.id IS NULL)";
 
         $rs = $DB->get_records_sql($sql);
+        $lost_links_count = 0;
 
         foreach ($rs as $record) {
-            mtrace('dealing with a lost link... ' /* . var_export($record) */);
+            $enrols_having_link_lost[]= $record->id;
+
+            if ($verbose) {
+                mtrace('dealing with a lost link: enrolid=' . ($record->id));
+            }
+            $lost_links_count += 1;
             enrol_metagroup_deal_with_lost_link($record);
 
-            if ($lostlinkaction != ENROL_EXT_REMOVED_UNENROL) {
-                // Удаляем пустые группы, если включена соответствующая настройка, и целевая группа присутствует.
+            if ($lostlinkaction == ENROL_EXT_REMOVED_UNENROL) {
+                // Удаляем опустевшую группы, если включена соответствующая настройка плагина, и целевая группа присутствует.
                 enrol_metagroup_handler::delete_empty_group_as_configured($record->customint2, true);
             }
         }
         // $rs->close();
-        mtrace('Done dealing with a lost links.');
+        if ($verbose) {
+            mtrace("Done dealing with $lost_links_count lost link(s).");
+        }
     }
 
     // End of new fragment.
@@ -394,6 +405,10 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
     foreach($rs as $ue) {
+
+        if(in_array($ue->enrolid, $enrols_having_link_lost)) {
+            continue;
+        }
 
         if (!isset($instances[$ue->enrolid])) {
             // Add instance to cache.
@@ -497,6 +512,11 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
     foreach($rs as $ue) {
+
+        if (in_array($ue->enrolid, $enrols_having_link_lost)) {
+            continue;
+        }
+
         ++$rs_counter;
 
         if (!isset($instances[$ue->enrolid])) {
@@ -605,6 +625,11 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
                           END) <> MAX(ue.timeend))";
     $rs = $DB->get_recordset_sql($sql, $params);
     foreach($rs as $ue) {
+
+        if (in_array($ue->enrolid, $enrols_having_link_lost)) {
+            continue;
+        }
+
         if (!isset($instances[$ue->enrolid])) {
             $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
         }
