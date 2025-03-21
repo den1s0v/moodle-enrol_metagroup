@@ -526,10 +526,12 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
         if ($ue->old_groupid && $ue->old_groupid != $instance->customint2) {
             // Move group member from old group to new one.
+            ///
+            echo (" <br><br><br><br><br><br> ");
 
             $ok = groups_add_member($instance->customint2, $ue->userid, 'enrol_metagroup', $instance->id);
-
-            if ($verbose) {
+            /// ↓
+            if ($verbose || 1) {
                 mtrace("  added user to group: $ue->userid ==> $instance->customint2 in course $instance->courseid (success: $ok).");
             }
 
