@@ -526,12 +526,11 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
         if ($ue->old_groupid && $ue->old_groupid != $instance->customint2) {
             // Move group member from old group to new one.
-            ///
-            echo (" <br><br><br><br><br><br> ");
+            /// echo (" <br><br><br><br><br><br> ");
 
             $ok = groups_add_member($instance->customint2, $ue->userid, 'enrol_metagroup', $instance->id);
             /// ↓
-            if ($verbose || 1) {
+            if ($verbose /* || 1 */) {
                 mtrace("  added user to group: $ue->userid ==> $instance->customint2 in course $instance->courseid (success: $ok).");
             }
 
@@ -540,8 +539,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
             if ($verbose) {
                 mtrace("  removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
             }
-            ///
-            echo(" <br> removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
+            /// echo(" <br> removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
 
             enrol_metagroup_handler::delete_empty_group_as_configured($ue->old_groupid, $verbose);
         }
