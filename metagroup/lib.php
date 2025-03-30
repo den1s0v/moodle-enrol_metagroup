@@ -64,7 +64,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $source_groupid = $instance->customint3;
             $source_group = groups_get_group($source_groupid, 'name');
             $source_groupname = $source_group ? $source_group->name : (
-                // Fallback if the group was deleted (ex. manually).
+                // Fallback to using saved groupname if the group was deleted (ex. manually).
                 $instance->customchar2 . ' [' . get_string('deleted') . ']'
             );
 
@@ -84,11 +84,21 @@ class enrol_metagroup_plugin extends enrol_plugin {
             }
             return get_string('defaultenrolnametext', 'enrol_' . $enrol, [
                 'method' => get_string('pluginname', 'enrol_' . $enrol),
-                'target_group' => $target_groupname,
-                'source_group' => $source_groupname,
-                'source_course' => $coursename,
+                'target_group' => self::shorten_long_name($target_groupname),
+                'source_group' => self::shorten_long_name($source_groupname),
+                'source_course' => self::shorten_long_name($coursename),
             ]);
         }
+    }
+
+    public static function shorten_long_name($s, $length_limit=40) {
+        $len = mb_strlen($s);
+        if ($len <= $length_limit) {
+            return $s;
+        }
+
+        $part_len = (int)(($length_limit - 1) / 2);
+        return mb_substr($s, 0, $part_len) . '…' . mb_substr($s, -$part_len);
     }
 
     /**
@@ -482,10 +492,12 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 } else {
                     // Just one group chosen before.
                     $group = groups_get_group($instance->customint3);
-                    if ($group)
+                    if ($group) {
                         $source_groupnames = [$group->id => $group->name];
-                    else
-                        $source_groupnames = [/* 0 => ('not found') */];
+                    } else {
+                        // Fallback to using saved groupname if the group was deleted (ex. manually).
+                        $source_groupnames = [$instance->customint3 => $instance->customchar2 . ' [' . get_string('deleted') . ']'];
+                    }
                 }
 
                 $options = array(
