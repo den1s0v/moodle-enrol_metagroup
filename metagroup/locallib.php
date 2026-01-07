@@ -290,40 +290,18 @@ class enrol_metagroup_handler {
 }
 
 /**
- * Sync all metagroup links.
+ * Обработка потерянных связей (когда родительский курс или группа удалены).
  *
- * @param int $courseid one course, empty mean all
- * @param bool $verbose verbose CLI output
- * @return int 0 means ok, 1 means error, 2 means plugin disabled
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @return array массив ID способов зачисления с потерянными связями
  */
-function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
-    global $CFG, $DB;
-    require_once("{$CFG->dirroot}/group/lib.php");
-
-    // Purge all roles if metagroup sync disabled, those can be recreated later here in cron.
-    if (!enrol_is_enabled('metagroup')) {
-        if ($verbose) {
-            mtrace('Metagroup plugin is disabled, unassigning all plugin roles and stopping.');
-        }
-        role_unassign_all(array('component'=>'enrol_metagroup'));
-        return 2;
-    }
-
-    // Unfortunately this may take a long time, execution can be interrupted safely.
-    core_php_time_limit::raise();
-    raise_memory_limit(MEMORY_HUGE);
-
-    if ($verbose) {
-        mtrace('Starting user enrolment synchronisation (enrol_metagroup) ...');
-    }
+function enrol_metagroup_sync_lost_links($courseid, $verbose) {
+    global $DB;
 
     $enrols_having_link_lost = [];
-
-
-    // Получаем настройку поведения при потере связи с родительским курсом.
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
-    // Обработка случаев, когда родительский курс или группа удалены.
     // Обрабатываем все потерянные связи, кроме случая ENROL_EXT_REMOVED_KEEP.
     if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
         $sql = "SELECT distinct e.*
@@ -337,7 +315,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         $lost_links_count = 0;
 
         foreach ($rs as $record) {
-            $enrols_having_link_lost[]= $record->id;
+            $enrols_having_link_lost[] = $record->id;
 
             if ($verbose) {
                 mtrace('dealing with a lost link: enrolid=' . ($record->id));
@@ -355,28 +333,34 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
     }
 
-    $instances = array(); // Cache enrol instances.
-    $local_groups = array(); // Cache groups instances.
+    return $enrols_having_link_lost;
+}
 
-    $metagroup = enrol_get_plugin('metagroup');
+/**
+ * Создание/восстановление отсутствующих зачислений и членств в группах.
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param array $enrols_having_link_lost массив ID способов зачисления с потерянными связями (для пропуска)
+ * @param array $instances кэш экземпляров способов зачисления (передаётся по ссылке)
+ * @param array $local_groups кэш групп (передаётся по ссылке)
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param array $skiproles массив ID ролей для пропуска
+ * @param bool $syncall синхронизировать всех пользователей независимо от ролей
+ * @return int количество обработанных записей
+ */
+function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_having_link_lost, &$instances, &$local_groups, $metagroup, $skiproles, $syncall) {
+    global $CFG, $DB;
 
-    $unenrolaction = $metagroup->get_config('unenrolaction', ENROL_EXT_REMOVED_SUSPENDNOROLES);
-    $skiproles     = $metagroup->get_config('nosyncroleids', '');
-    $skiproles     = empty($skiproles) ? array() : explode(',', $skiproles);
-    $syncall       = $metagroup->get_config('syncall', 1);
-
-    $allroles = get_all_roles();
-
-
-    // Iterate through all not enrolled yet users (not in the course or/and not in target group).
-    // For each active enrolment of each user find the minimum
-    // enrolment startdate and maximum enrolment enddate.
-    // This SQL relies on the fact that ENROL_USER_ACTIVE < ENROL_USER_SUSPENDED
-    // and ENROL_INSTANCE_ENABLED < ENROL_INSTANCE_DISABLED. Condition "pue.status + pe.status = 0" means
-    // that enrolment is active. When MIN(pue.status + pe.status)=0 it means there exists an active
-    // enrolment.
-    // Added: restrict `ue`s to members source group (and group membership should be originated in corresponding enrol instance).
-    // A returned record should have: ue_id == NULL (means the need to enrol) and/or gm_id == NULL (means the need to add to target group).
+    // Итерация по всем пользователям, которые ещё не зачислены (не в курсе или/и не в целевой группе).
+    // Для каждого активного зачисления каждого пользователя находим минимальную
+    // дату начала зачисления и максимальную дату окончания зачисления.
+    // Этот SQL опирается на тот факт, что ENROL_USER_ACTIVE < ENROL_USER_SUSPENDED
+    // и ENROL_INSTANCE_ENABLED < ENROL_INSTANCE_DISABLED. Условие "pue.status + pe.status = 0" означает
+    // что зачисление активно. Когда MIN(pue.status + pe.status)=0 это означает, что существует активное
+    // зачисление.
+    // Добавлено: ограничение `ue`s до членов исходной группы (и членство в группе должно быть создано соответствующим экземпляром зачисления).
+    // Возвращаемая запись должна иметь: ue_id == NULL (означает необходимость зачисления) и/или gm_id == NULL (означает необходимость добавления в целевую группу).
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
     $params['courseid'] = $courseid;
@@ -398,7 +382,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
              WHERE ue.id IS NULL OR gm.id IS NULL
              GROUP BY pue.userid, e.id";
 
-    // Create / restore user enrolments & group memberships.
+    // Создание / восстановление зачислений пользователей и членств в группах.
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
     foreach($rs as $ue) {
@@ -408,21 +392,21 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
 
         if (!isset($instances[$ue->enrolid])) {
-            // Add instance to cache.
+            // Добавляем экземпляр в кэш.
             $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
         }
         $instance = $instances[$ue->enrolid];
 
         if (!$syncall) {
-            // Check if current user has any of synced roles (in source course).
-            // This may be slow if very many users are ignored in sync.
+            // Проверяем, есть ли у текущего пользователя какие-либо синхронизируемые роли (в исходном курсе).
+            // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
             $parentcontext = context_course::instance($instance->customint1);
             list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
             $params['contextid'] = $parentcontext->id;
             $params['userid'] = $ue->userid;
             $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
             if (!$DB->record_exists_select('role_assignments', $select, $params)) {
-                // Bad luck, this user does not have any role we want in parent course.
+                // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
                 if ($verbose) {
                     mtrace("  skipping enrolling: $ue->userid ==> $instance->courseid (user without role)");
                 }
@@ -432,16 +416,16 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
         ++$rs_counter;
 
-        // So now we have aggregated values that we will use for the metagroup enrolment status, timeend and timestart.
-        // Again, we use the fact that active=0 and disabled/suspended=1. Only when MIN(pue.status + pe.status)=0 the enrolment is active:
+        // Теперь у нас есть агрегированные значения, которые мы будем использовать для статуса зачисления метагруппы, timeend и timestart.
+        // Снова используем тот факт, что active=0 и disabled/suspended=1. Только когда MIN(pue.status + pe.status)=0 зачисление активно:
         $ue->status = ($ue->status == ENROL_USER_ACTIVE + ENROL_INSTANCE_ENABLED) ? ENROL_USER_ACTIVE : ENROL_USER_SUSPENDED;
-        // Timeend 9999999999 was used instead of 0 in the "MAX()" function:
+        // Timeend 9999999999 использовался вместо 0 в функции "MAX()":
         $ue->timeend = ($ue->timeend == 9999999999) ? 0 : (int)$ue->timeend;
-        // Timestart 9999999999 is only possible when there are no active enrolments:
+        // Timestart 9999999999 возможен только когда нет активных зачислений:
         $ue->timestart = ($ue->timestart == 9999999999) ? 0 : (int)$ue->timestart;
 
         if (!$ue->ue_id) {
-            // Not enrolled yet.
+            // Ещё не зачислен.
             $metagroup->enrol_user($instance, $ue->userid, null, $ue->timestart, $ue->timeend, $ue->status);
 
             if ($verbose) {
@@ -449,19 +433,19 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
             }
         }
         if (!$ue->gm_id && $instance->customint2) {
-            // Not a group member yet.
+            // Ещё не член группы.
             $gid = $instance->customint2;
 
-            // First, ensure that target group exists.
+            // Сначала убеждаемся, что целевая группа существует.
             if (isset($local_groups[$gid])) {
                 $group = $local_groups[$gid];
             } else {
                 if (!$group = groups_get_group($gid)) {
-                    // Add new group.
+                    // Добавляем новую группу.
                     $new_groupid = enrol_metagroup_create_new_group($instance->courseid, $instance->customint3, false);
 
                     if ($new_groupid != $gid) {
-                        // Update instance with new target group id!
+                        // Обновляем экземпляр с новым ID целевой группы!
                         $DB->update_record('enrol', (object)['id' => $instance->id, 'customint2' => $new_groupid]);
                     }
 
@@ -471,7 +455,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
             }
 
-            // Add member to group.
+            // Добавляем члена в группу.
             $ok = groups_add_member($group, $ue->userid, 'enrol_metagroup', $instance->id);
 
             if ($verbose) {
@@ -481,15 +465,30 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     }
     $rs->close();
 
-
     if ($verbose) {
         mtrace("Absent/incomplete enrolments processed: $rs_counter.");
     }
 
+    return $rs_counter;
+}
 
-    // Unenrol / remove from group as necessary - ignore enabled flag, we want to get rid of existing enrols in any case.
-    // Added: restrict `ue`s to members source group (and group membership should be originated in corresponding enrol instance).
-    // A returned record should have: parent_enrolid == NULL (means the need to unenrol) and/or old_groupid != NULL (means the need to remove from that group).
+/**
+ * Удаление лишних зачислений и перемещение между группами.
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param array $enrols_having_link_lost массив ID способов зачисления с потерянными связями (для пропуска)
+ * @param array $instances кэш экземпляров способов зачисления (передаётся по ссылке)
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param int $unenrolaction действие при удалении зачисления
+ * @return int количество обработанных записей
+ */
+function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_having_link_lost, &$instances, $metagroup, $unenrolaction) {
+    global $CFG, $DB;
+
+    // Отчисление / удаление из группы по мере необходимости - игнорируем флаг enabled, мы хотим избавиться от существующих зачислений в любом случае.
+    // Добавлено: ограничение `ue`s до членов исходной группы (и членство в группе должно быть создано соответствующим экземпляром зачисления).
+    // Возвращаемая запись должна иметь: parent_enrolid == NULL (означает необходимость отчисления) и/или old_groupid != NULL (означает необходимость удаления из этой группы).
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
     $params['courseid'] = $courseid;
@@ -534,7 +533,7 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
 
         if (!$ue->parent_enrolid) {
-            // Unenrol / suspend as configured.
+            // Отчисление / приостановка в соответствии с настройками.
             if ($unenrolaction == ENROL_EXT_REMOVED_UNENROL) {
                 $metagroup->unenrol_user($instance, $ue->userid);
                 if ($verbose) {
@@ -563,26 +562,43 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
     }
     $rs->close();
 
-
     if ($verbose) {
         mtrace("Extra enrolments processed: $rs_counter.");
     }
 
+    return $rs_counter;
+}
+
+/**
+ * Обновление статусов зачислений на основе родительских зачислений.
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param array $enrols_having_link_lost массив ID способов зачисления с потерянными связями (для пропуска)
+ * @param array $instances кэш экземпляров способов зачисления (передаётся по ссылке)
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param array $skiproles массив ID ролей для пропуска
+ * @param bool $syncall синхронизировать всех пользователей независимо от ролей
+ * @param int $unenrolaction действие при удалении зачисления
+ */
+function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having_link_lost, &$instances, $metagroup, $skiproles, $syncall, $unenrolaction) {
+    global $CFG, $DB;
+
     // Обновление статусов зачислений - метагрупповые зачисления игнорируются, чтобы избежать рекурсии.
-    // Note the trick here is that the active enrolment and instance constants have value 0.
+    // Примечание: трюк здесь в том, что константы активного зачисления и экземпляра имеют значение 0.
+    // Запрос строит список всех неметагрупповых зачислений, которые находятся на курсах (детях), связанных метагрупповым
+    // зачислением, затем группирует их по курсу, который связан с ними (родителям).
+    //
+    // Он вернёт результаты только там, где есть разница между статусом родителя и наименьшим статусом
+    // детей (помните, что 0 - это активный, любой другой статус - это какая-то форма неактивного), или время самого раннего ненулевого
+    // времени начала ребёнка отличается от родителя, или самая длинная эффективная дата окончания изменилась.
+    //
+    // Последние два оператора case в предложении HAVING предназначены для игнорирования любых неактивных записей детей при вычислении
+    // времени начала и окончания.
+    // Добавлено: ограничение `ue`s до членов исходной группы (которая установлена в экземпляре зачисления метагруппы).
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
     $params['courseid'] = $courseid;
-    // The query builds a list of all the non-metagroup enrolments that are on courses (the children) that are linked to by a metagroup
-    // enrolment, it then groups them by the course that linked to them (the parents).
-    //
-    // It will only return results where the there is a difference between the status of the parent and the lowest status
-    // of the children (remember that 0 is active, any other status is some form of inactive), or the time the earliest non-zero
-    // start time of a child is different to the parent, or the longest effective end date has changed.
-    //
-    // The last two case statements in the HAVING clause are designed to ignore any inactive child records when calculating
-    // the start and end time.
-    // Added: restrict `ue`s to members source group (that is set in metagroup enrol instance).
     $sql = "SELECT ue.userid, ue.enrolid,
                    MIN(xpue.status + xpe.status) AS pstatus,
                    MIN(CASE WHEN (xpue.status + xpe.status = 0) THEN xpue.timestart ELSE 9999999999 END) AS ptimestart,
@@ -629,14 +645,14 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
         if ($ue->pstatus == ENROL_USER_ACTIVE and (!$ue->ptimeend || $ue->ptimeend > time())
                 and !$syncall and $unenrolaction != ENROL_EXT_REMOVED_UNENROL) {
-            // This may be slow if very many users are ignored in sync.
+            // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
             $parentcontext = context_course::instance($instance->customint1);
             list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
             $params['contextid'] = $parentcontext->id;
             $params['userid'] = $ue->userid;
             $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
             if (!$DB->record_exists_select('role_assignments', $select, $params)) {
-                // Bad luck, this user does not have any role we want in parent course.
+                // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
                 if ($verbose) {
                     mtrace("  skipping unsuspending: $ue->userid ==> $instance->courseid (user without role)");
                 }
@@ -654,17 +670,27 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
     }
     $rs->close();
+}
 
+/**
+ * Назначение всех необходимых ролей (в настоящее время отсутствующих).
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param array $allroles массив всех ролей
+ */
+function enrol_metagroup_sync_roles_assign($courseid, $verbose, $metagroup, $allroles) {
+    global $CFG, $DB;
 
-    // Now assign all necessary roles (currently absent).
     $enabled = explode(',', $CFG->enrol_plugins_enabled);
     foreach($enabled as $k=>$v) {
         if ($v === 'metagroup') {
-            continue; // No metagroup sync of metagroup roles.
+            continue; // Нет синхронизации метагрупповых ролей метагруппой.
         }
         $enabled[$k] = 'enrol_'.$v;
     }
-    $enabled[] = ''; // Manual assignments are replicated too.
+    $enabled[] = ''; // Ручные назначения также реплицируются.
 
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal($enabled, SQL_PARAMS_NAMED, 'e');
@@ -696,9 +722,20 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
     }
     $rs->close();
+}
 
+/**
+ * Удаление нежелательных ролей - включая игнорируемые роли и отключённые плагины тоже.
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param array $allroles массив всех ролей
+ * @param int $unenrolaction действие при удалении зачисления
+ */
+function enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $allroles, $unenrolaction) {
+    global $DB;
 
-    // Remove unwanted roles - include ignored roles and disabled plugins too.
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     $params = array();
     $params['coursecontext'] = CONTEXT_COURSE;
@@ -731,61 +768,133 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         }
         $rs->close();
     }
+}
 
+/**
+ * Отчисление или приостановка пользователей без синхронизируемых ролей, если syncall отключён.
+ *
+ * @param int|null $courseid ID курса для обработки, null означает все курсы
+ * @param bool $verbose подробный вывод
+ * @param array $instances кэш экземпляров способов зачисления (передаётся по ссылке)
+ * @param enrol_metagroup_plugin $metagroup экземпляр плагина
+ * @param int $unenrolaction действие при удалении зачисления
+ */
+function enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, &$instances, $metagroup, $unenrolaction) {
+    global $DB;
 
-    // Kick out or suspend users without synced roles if syncall disabled.
-    if (!$syncall) {
-        if ($unenrolaction == ENROL_EXT_REMOVED_UNENROL) {
-            // Unenrol.
-            $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
-            $params = array();
-            $params['coursecontext'] = CONTEXT_COURSE;
-            $params['courseid'] = $courseid;
-            $sql = "SELECT ue.userid, ue.enrolid
+    if ($unenrolaction == ENROL_EXT_REMOVED_UNENROL) {
+        // Отчисление.
+        $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
+        $params = array();
+        $params['coursecontext'] = CONTEXT_COURSE;
+        $params['courseid'] = $courseid;
+        $sql = "SELECT ue.userid, ue.enrolid
                       FROM {user_enrolments} ue
                       JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
                       JOIN {context} c ON (e.courseid = c.instanceid AND c.contextlevel = :coursecontext)
                  LEFT JOIN {role_assignments} ra ON (ra.contextid = c.id AND ra.itemid = e.id AND ra.userid = ue.userid)
                      WHERE ra.id IS NULL";
-            $ues = $DB->get_recordset_sql($sql, $params);
-            foreach($ues as $ue) {
-                if (!isset($instances[$ue->enrolid])) {
-                    $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-                }
-                $instance = $instances[$ue->enrolid];
-                $metagroup->unenrol_user($instance, $ue->userid);
-                if ($verbose) {
-                    mtrace("  unenrolling: $ue->userid ==> $instance->courseid (user without role)");
-                }
+        $ues = $DB->get_recordset_sql($sql, $params);
+        foreach($ues as $ue) {
+            if (!isset($instances[$ue->enrolid])) {
+                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
             }
-            $ues->close();
+            $instance = $instances[$ue->enrolid];
+            $metagroup->unenrol_user($instance, $ue->userid);
+            if ($verbose) {
+                mtrace("  unenrolling: $ue->userid ==> $instance->courseid (user without role)");
+            }
+        }
+        $ues->close();
 
-        } else {
-            // Just suspend the users.
-            $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
-            $params = array();
-            $params['coursecontext'] = CONTEXT_COURSE;
-            $params['courseid'] = $courseid;
-            $params['active'] = ENROL_USER_ACTIVE;
-            $sql = "SELECT ue.userid, ue.enrolid
+    } else {
+        // Просто приостанавливаем пользователей.
+        $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
+        $params = array();
+        $params['coursecontext'] = CONTEXT_COURSE;
+        $params['courseid'] = $courseid;
+        $params['active'] = ENROL_USER_ACTIVE;
+        $sql = "SELECT ue.userid, ue.enrolid
                       FROM {user_enrolments} ue
                       JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
                       JOIN {context} c ON (e.courseid = c.instanceid AND c.contextlevel = :coursecontext)
                  LEFT JOIN {role_assignments} ra ON (ra.contextid = c.id AND ra.itemid = e.id AND ra.userid = ue.userid)
                      WHERE ra.id IS NULL AND ue.status = :active";
-            $ues = $DB->get_recordset_sql($sql, $params);
-            foreach($ues as $ue) {
-                if (!isset($instances[$ue->enrolid])) {
-                    $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-                }
-                $instance = $instances[$ue->enrolid];
-                $metagroup->update_user_enrol($instance, $ue->userid, ENROL_USER_SUSPENDED);
-                if ($verbose) {
-                    mtrace("  suspending: $ue->userid ==> $instance->courseid (user without role)");
-                }
+        $ues = $DB->get_recordset_sql($sql, $params);
+        foreach($ues as $ue) {
+            if (!isset($instances[$ue->enrolid])) {
+                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
             }
-            $ues->close();
+            $instance = $instances[$ue->enrolid];
+            $metagroup->update_user_enrol($instance, $ue->userid, ENROL_USER_SUSPENDED);
+            if ($verbose) {
+                mtrace("  suspending: $ue->userid ==> $instance->courseid (user without role)");
+            }
         }
+        $ues->close();
+    }
+}
+
+/**
+ * Sync all metagroup links.
+ *
+ * @param int $courseid one course, empty mean all
+ * @param bool $verbose verbose CLI output
+ * @return int 0 means ok, 1 means error, 2 means plugin disabled
+ */
+function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
+    global $CFG;
+    require_once("{$CFG->dirroot}/group/lib.php");
+
+    // Удаляем все роли, если синхронизация метагруппы отключена, они могут быть воссозданы позже здесь в cron.
+    if (!enrol_is_enabled('metagroup')) {
+        if ($verbose) {
+            mtrace('Metagroup plugin is disabled, unassigning all plugin roles and stopping.');
+        }
+        role_unassign_all(array('component'=>'enrol_metagroup'));
+        return 2;
+    }
+
+    // К сожалению, это может занять много времени, выполнение может быть безопасно прервано.
+    core_php_time_limit::raise();
+    raise_memory_limit(MEMORY_HUGE);
+
+    if ($verbose) {
+        mtrace('Starting user enrolment synchronisation (enrol_metagroup) ...');
+    }
+
+    // Шаг 1: Обработка потерянных связей (когда родительский курс или группа удалены).
+    $enrols_having_link_lost = enrol_metagroup_sync_lost_links($courseid, $verbose);
+
+    // Инициализация кэшей и получение настроек плагина.
+    $instances = array(); // Кэш экземпляров способов зачисления.
+    $local_groups = array(); // Кэш экземпляров групп.
+
+    $metagroup = enrol_get_plugin('metagroup');
+    $unenrolaction = $metagroup->get_config('unenrolaction', ENROL_EXT_REMOVED_SUSPENDNOROLES);
+    $skiproles = $metagroup->get_config('nosyncroleids', '');
+    $skiproles = empty($skiproles) ? array() : explode(',', $skiproles);
+    $syncall = $metagroup->get_config('syncall', 1);
+    $allroles = get_all_roles();
+
+    // Шаг 2: Создание/восстановление отсутствующих зачислений и членств в группах.
+    enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_having_link_lost, $instances, $local_groups, $metagroup, $skiproles, $syncall);
+
+    // Шаг 3: Удаление лишних зачислений и перемещение между группами.
+    enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_having_link_lost, $instances, $metagroup, $unenrolaction);
+
+    // Шаг 4: Обновление статусов зачислений на основе родительских зачислений.
+    enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having_link_lost, $instances, $metagroup, $skiproles, $syncall, $unenrolaction);
+
+    // Шаг 5: Назначение всех необходимых ролей (в настоящее время отсутствующих).
+    enrol_metagroup_sync_roles_assign($courseid, $verbose, $metagroup, $allroles);
+
+    // Шаг 6: Удаление нежелательных ролей.
+    enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $allroles, $unenrolaction);
+
+    // Шаг 7: Отчисление или приостановка пользователей без синхронизируемых ролей, если syncall отключён.
+    if (!$syncall) {
+        enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, $instances, $metagroup, $unenrolaction);
     }
 
     if ($verbose) {
