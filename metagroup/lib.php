@@ -75,13 +75,28 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 '[' . get_string('deleted') . ']'
             );
 
-            $course = get_course($instance->customint1);
+            // Используем логический курс для отображения (то, что видит пользователь).
+            $logical_courseid = $instance->customint1;
+            $root_courseid = !empty($instance->customint4) ? $instance->customint4 : null;
+            $root_coursename = !empty($instance->customchar1) ? $instance->customchar1 : null;
+            $root_groupname = !empty($instance->customchar3) ? $instance->customchar3 : null;
+            
+            $course = get_course($logical_courseid);
             if ($course) {
                 $coursename = format_string(get_course_display_name_for_list($course));
             } else {
                 // Use course id, if the course has been deleted.
-                $coursename = $instance->customint1;
+                $coursename = $logical_courseid;
             }
+            
+            // Если корневой курс отличается от логического, показываем информацию о корневом источнике.
+            if ($root_courseid && $root_courseid != $logical_courseid && $root_coursename) {
+                $coursename .= ' (через ' . self::shorten_long_name($root_coursename) . ')';
+                if ($root_groupname && $root_groupname != $source_groupname) {
+                    $source_groupname .= ' (из ' . self::shorten_long_name($root_groupname) . ')';
+                }
+            }
+            
             return get_string('defaultenrolnametext', 'enrol_' . $enrol, [
                 'method' => get_string('pluginname', 'enrol_' . $enrol),
                 'target_group' => self::shorten_long_name($target_groupname),
@@ -188,6 +203,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
             $target_groupid = enrol_metagroup_create_new_group($course->id, null, get_course($fields['customint1'])->shortname);
         }
 
+        // Определяем корневой курс для транзитивных связей.
+        $logical_courseid = $fields['customint1'];
+        $root_info = null;
+
         foreach ($source_groups as $source_groupid) {
             if (!empty($fields['customint2']) && $fields['customint2'] == ENROL_METAGROUP_CREATE_SEPARATE_GROUPS) {
                 // Create saparate groups for each source group as requested.
@@ -198,15 +217,76 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 $target_groupid = enrol_metagroup_create_new_group($course->id, $source_groupid);
             }
 
-            // Update group id before each save.
-            $data['customint2'] = $target_groupid;
-            $data['customint3'] = $source_groupid;
+            // Проверяем, является ли группа сводной (имеет членов из нескольких метагрупповых связей).
+            $aggregated_enrols = enrol_metagroup_detect_aggregated_group($logical_courseid, $source_groupid);
+            
+            if (!empty($aggregated_enrols)) {
+                // Группа сводная - нужно обработать все корневые источники.
+                // Для каждой метагрупповой связи находим её корневой источник.
+                $root_sources = [];
+                foreach ($aggregated_enrols as $enrol) {
+                    $parent_root_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
+                    $parent_root_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
+                    
+                    $root = enrol_metagroup_find_root_course($parent_root_courseid, $parent_root_groupid);
+                    if ($root && !empty($root['root_courseid'])) {
+                        $key = $root['root_courseid'] . '_' . ($root['root_groupid'] ?? 0);
+                        if (!isset($root_sources[$key])) {
+                            $root_sources[$key] = $root;
+                        }
+                    }
+                }
+                
+                // Создаём отдельную метагрупповую связь для каждого корневого источника.
+                foreach ($root_sources as $root) {
+                    $data['customint2'] = $target_groupid;
+                    $data['customint3'] = $source_groupid;
+                    $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
+                    
+                    // Сохраняем логические значения (то, что видит пользователь).
+                    $data['customint1'] = $logical_courseid;
+                    
+                    // Сохраняем корневые значения (используются для синхронизации).
+                    $data['customint4'] = $root['root_courseid'];
+                    $data['customint5'] = $root['root_groupid'];
+                    $data['customchar1'] = $root['root_coursename'];
+                    $data['customchar3'] = $root['root_groupname'];
+                    
+                    $result = parent::add_instance($course, $data);
+                }
+            } else {
+                // Обычная группа - находим корневой курс.
+                $root = enrol_metagroup_find_root_course($logical_courseid, $source_groupid);
+                
+                // Update group id before each save.
+                $data['customint2'] = $target_groupid;
+                $data['customint3'] = $source_groupid;
 
-            // Fetch & cache source group's name.
-            $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
+                // Fetch & cache source group's name.
+                $data['customchar2'] = groups_get_group($source_groupid, 'name', MUST_EXIST)->name;
 
-            // Add enrolling method to the course: one for each linked group.
-            $result = parent::add_instance($course, $data);
+                // Сохраняем логические значения (то, что видит пользователь).
+                $data['customint1'] = $logical_courseid;
+                
+                // Сохраняем корневые значения (используются для синхронизации).
+                if ($root && !empty($root['root_courseid'])) {
+                    $data['customint4'] = $root['root_courseid'];
+                    $data['customint5'] = $root['root_groupid'];
+                    $data['customchar1'] = $root['root_coursename'];
+                    $data['customchar3'] = $root['root_groupname'];
+                } else {
+                    // Если корневой курс не найден (возможно, цикл), используем логический курс как корневой.
+                    $data['customint4'] = $logical_courseid;
+                    $data['customint5'] = $source_groupid;
+                    $course_obj = get_course($logical_courseid);
+                    $data['customchar1'] = $course_obj->shortname ?: $course_obj->fullname;
+                    $group_obj = groups_get_group($source_groupid, 'name', MUST_EXIST);
+                    $data['customchar3'] = $group_obj->name;
+                }
+
+                // Add enrolling method to the course: one for each linked group.
+                $result = parent::add_instance($course, $data);
+            }
         }
 
         enrol_metagroup_sync($course->id, false);
@@ -240,6 +320,48 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         // Keep (frozen) "cache" attributes.
         $data->customchar2 = $instance->customchar2;
+
+        // Если изменён логический курс или группа, пересчитываем корневой курс.
+        if (isset($data->customint1) && $data->customint1 != $instance->customint1) {
+            // Запрещаем изменение, если новый логический курс создаст непосредственный цикл.
+            if ($data->customint1 == $instance->courseid) {
+                throw new moodle_exception('invalidcourseid', 'error');
+            }
+            
+            $logical_courseid = $data->customint1;
+            $logical_groupid = isset($data->customint3) ? $data->customint3 : $instance->customint3;
+            
+            // Находим корневой курс.
+            $root = enrol_metagroup_find_root_course($logical_courseid, $logical_groupid);
+            
+            if ($root && !empty($root['root_courseid'])) {
+                $data->customint4 = $root['root_courseid'];
+                $data->customint5 = $root['root_groupid'];
+                $data->customchar1 = $root['root_coursename'];
+                $data->customchar3 = $root['root_groupname'];
+            } else {
+                // Если корневой курс не найден, используем логический как корневой.
+                $data->customint4 = $logical_courseid;
+                $data->customint5 = $logical_groupid;
+                $course_obj = get_course($logical_courseid);
+                $data->customchar1 = $course_obj->shortname ?: $course_obj->fullname;
+                $group_obj = groups_get_group($logical_groupid, 'name', MUST_EXIST);
+                $data->customchar3 = $group_obj->name;
+            }
+        } else if (isset($data->customint3) && $data->customint3 != $instance->customint3) {
+            // Если изменена только группа, пересчитываем корневую группу.
+            $logical_courseid = isset($data->customint1) ? $data->customint1 : $instance->customint1;
+            $logical_groupid = $data->customint3;
+            
+            $root = enrol_metagroup_find_root_course($logical_courseid, $logical_groupid);
+            
+            if ($root && !empty($root['root_courseid'])) {
+                $data->customint4 = $root['root_courseid'];
+                $data->customint5 = $root['root_groupid'];
+                $data->customchar1 = $root['root_coursename'];
+                $data->customchar3 = $root['root_groupname'];
+            }
+        }
 
         $result = parent::update_instance($instance, $data);
 
@@ -587,7 +709,11 @@ class enrol_metagroup_plugin extends enrol_plugin {
                     } else if (!has_capability('enrol/metagroup:selectaslinked', $coursecontext)) {
                         $errors['customint1'] = get_string('nopermissions', 'error',
                             'enrol/metagroup:selectaslinked');
-                    } else if ($coursesrecord->id == SITEID or $coursesrecord->id == $thiscourseid) {
+                    } else if ($coursesrecord->id == SITEID) {
+                        $errors['customint1'] = get_string('invalidcourseid', 'error');
+                    } else if ($coursesrecord->id == $thiscourseid) {
+                        // Запрещаем только непосредственный цикл (курс на сам себя).
+                        // Разрешаем создание связи из дочернего курса (будет найден корневой курс).
                         $errors['customint1'] = get_string('invalidcourseid', 'error');
                     }
                 }

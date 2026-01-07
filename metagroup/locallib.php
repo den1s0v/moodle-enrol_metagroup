@@ -98,16 +98,43 @@ class enrol_metagroup_handler {
 
         // List of enrolments in parent course (we ignore metagroup enrols in parents completely).
         // Added: restrict `ue`s to members source group.
+        // Используем корневой курс и группу для синхронизации, если они указаны.
+        $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
+        $root_groupid = !empty($instance->customint5) ? $instance->customint5 : $instance->customint3;
+        $logical_courseid = $instance->customint1;
+        $logical_groupid = $instance->customint3;
+        
         list($enabled, $params) = $DB->get_in_or_equal(explode(',', $CFG->enrol_plugins_enabled), SQL_PARAMS_NAMED, 'e');
         $params['userid'] = $userid;
-        $params['parentcourse'] = $instance->customint1;
-        $params['groupid'] = $instance->customint3;
+        $params['parentcourse'] = $root_courseid;
+        $params['groupid'] = $root_groupid;
         $sql = "SELECT ue.*, e.status AS enrolstatus
                   FROM {user_enrolments} ue
                   JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol <> 'metagroup' AND e.courseid = :parentcourse AND e.enrol $enabled)
                   JOIN {groups_members} gm ON (gm.userid = ue.userid)
                  WHERE ue.userid = :userid AND gm.groupid = :groupid";
         $parentues = $DB->get_records_sql($sql, $params);
+        
+        // Проверяем также вручную добавленных студентов в логической группе (если она отличается от корневой).
+        if ($logical_courseid != $root_courseid || $logical_groupid != $root_groupid) {
+            // Ищем студентов, добавленных вручную в логическую группу.
+            $manual_params = $params;
+            $manual_params['logicalcourse'] = $logical_courseid;
+            $manual_params['logicalgroup'] = $logical_groupid;
+            $manual_members = $DB->get_records_sql(
+                "SELECT DISTINCT ue.*, e.status AS enrolstatus
+                  FROM {user_enrolments} ue
+                  JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol <> 'metagroup' AND e.courseid = :logicalcourse AND e.enrol $enabled)
+                  JOIN {groups_members} gm ON (gm.userid = ue.userid AND gm.groupid = :logicalgroup AND (gm.itemid = 0 OR gm.component = ''))
+                 WHERE ue.userid = :userid",
+                $manual_params
+            );
+            // Объединяем результаты.
+            foreach ($manual_members as $manual_ue) {
+                $parentues[] = $manual_ue;
+            }
+        }
+        
         // Current enrolments for this instance.
         $ue = $DB->get_record('user_enrolments', array('enrolid'=>$instance->id, 'userid'=>$userid));
 
@@ -117,7 +144,7 @@ class enrol_metagroup_handler {
             return;
         }
 
-        if (!$parentcontext = context_course::instance($instance->customint1, IGNORE_MISSING)) {
+        if (!$parentcontext = context_course::instance($root_courseid, IGNORE_MISSING)) {
             // Weird, we should not get here.
             // Maybe if parent course had been deleted.
             return;
@@ -290,6 +317,116 @@ class enrol_metagroup_handler {
 }
 
 /**
+ * Находит корневой курс через цепочку метагрупповых связей.
+ *
+ * Рекурсивно проходит по цепочке метагрупповых связей, чтобы найти корневой курс.
+ * Если курс сам является корневым (не имеет входящих метагрупповых связей), возвращает его данные.
+ *
+ * @param int $courseid ID курса для поиска корневого
+ * @param int|null $groupid ID группы в этом курсе (опционально, для точного определения цепочки)
+ * @param array $visited массив посещённых курсов для защиты от циклов (внутренний параметр)
+ * @return array|null массив с ключами: 'root_courseid', 'root_groupid', 'root_coursename', 'root_groupname'
+ *                    или null, если курс не найден или обнаружен цикл
+ */
+function enrol_metagroup_find_root_course($courseid, $groupid = null, $visited = []) {
+    global $DB;
+
+    // Защита от циклов.
+    if (in_array($courseid, $visited)) {
+        // Обнаружен цикл, возвращаем null.
+        return null;
+    }
+    $visited[] = $courseid;
+
+    // Проверяем, является ли этот курс дочерним (имеет входящие метагрупповые связи).
+    // Ищем метагрупповые связи, где этот курс является целевым (courseid).
+    // Если указана группа, ищем связи, которые добавляют студентов в эту группу.
+    $conditions = [
+        'courseid' => $courseid,
+        'enrol' => 'metagroup',
+        'status' => ENROL_INSTANCE_ENABLED
+    ];
+    if ($groupid) {
+        $conditions['customint2'] = $groupid;
+    }
+    
+    $parent_enrols = $DB->get_records('enrol', $conditions);
+
+    if (empty($parent_enrols)) {
+        // Этот курс является корневым - не имеет входящих метагрупповых связей.
+        $course = $DB->get_record('course', ['id' => $courseid], 'id,shortname,fullname');
+        if (!$course) {
+            return null;
+        }
+        
+        $root_groupid = null;
+        $root_groupname = null;
+        if ($groupid) {
+            $group = $DB->get_record('groups', ['id' => $groupid], 'id,name');
+            if ($group) {
+                $root_groupid = $groupid;
+                $root_groupname = $group->name;
+            }
+        }
+        
+        return [
+            'root_courseid' => $courseid,
+            'root_groupid' => $root_groupid,
+            'root_coursename' => $course->shortname ?: $course->fullname,
+            'root_groupname' => $root_groupname
+        ];
+    }
+
+    // Этот курс является дочерним. Берём первую активную метагрупповую связь.
+    // Если указана группа, используем связь, которая добавляет в эту группу.
+    $parent_enrol = reset($parent_enrols);
+    
+    // Определяем родительский курс. Используем корневой курс, если он указан, иначе логический.
+    $parent_courseid = !empty($parent_enrol->customint4) ? $parent_enrol->customint4 : $parent_enrol->customint1;
+    $parent_groupid = !empty($parent_enrol->customint5) ? $parent_enrol->customint5 : $parent_enrol->customint3;
+
+    // Рекурсивно ищем корневой курс от родительского.
+    $root = enrol_metagroup_find_root_course($parent_courseid, $parent_groupid, $visited);
+    
+    if ($root === null) {
+        // Обнаружен цикл или ошибка, возвращаем null.
+        return null;
+    }
+
+    // Если корневая группа ещё не определена, используем группу из родительской связи.
+    if ($root['root_groupid'] === null && $parent_groupid) {
+        $group = $DB->get_record('groups', ['id' => $parent_groupid], 'id,name');
+        if ($group) {
+            $root['root_groupid'] = $parent_groupid;
+            $root['root_groupname'] = $group->name;
+        }
+    }
+
+    return $root;
+}
+
+/**
+ * Определяет, является ли группа сводной (имеет членов из нескольких метагрупповых связей).
+ *
+ * @param int $courseid ID курса, в котором находится группа
+ * @param int $groupid ID группы для проверки
+ * @return array массив всех метагрупповых связей (enrol records), которые добавляют студентов в эту группу
+ */
+function enrol_metagroup_detect_aggregated_group($courseid, $groupid) {
+    global $DB;
+
+    // Находим все метагрупповые связи, которые используют эту группу как целевую.
+    $enrols = $DB->get_records('enrol', [
+        'courseid' => $courseid,
+        'customint2' => $groupid,
+        'enrol' => 'metagroup',
+        'status' => ENROL_INSTANCE_ENABLED
+    ]);
+
+    return $enrols;
+}
+
+/**
  * Обработка потерянных связей (когда родительский курс или группа удалены).
  *
  * @param int|null $courseid ID курса для обработки, null означает все курсы
@@ -302,12 +439,13 @@ function enrol_metagroup_sync_lost_links($courseid, $verbose) {
     $enrols_having_link_lost = [];
     $lostlinkaction = get_config('enrol_metagroup', 'lostlinkaction');
 
-    // Обрабатываем все потерянные связи, кроме случая ENROL_EXT_REMOVED_KEEP.
-    if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
+        // Обрабатываем все потерянные связи, кроме случая ENROL_EXT_REMOVED_KEEP.
+        // Проверяем логические связи (customint1, customint3), так как они используются для отображения.
+        if ($lostlinkaction != ENROL_EXT_REMOVED_KEEP) {
         $sql = "SELECT distinct e.*
                 FROM {enrol} e
-                LEFT JOIN {course} c ON c.id = e.customint1
-                LEFT JOIN {groups} g ON g.id = e.customint3
+                LEFT JOIN {course} c ON c.id = COALESCE(e.customint4, e.customint1)
+                LEFT JOIN {groups} g ON g.id = COALESCE(e.customint5, e.customint3)
                 WHERE e.enrol = 'metagroup'
                 AND (c.id IS NULL OR g.id IS NULL)";
 
@@ -375,7 +513,7 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
               FROM {user_enrolments} pue
               JOIN {enrol} pe ON (pe.id = pue.enrolid AND pe.enrol <> 'metagroup' AND pe.enrol $enabled)
               JOIN {groups_members} pgm ON (pgm.userid = pue.userid)
-              JOIN {enrol} e ON (e.customint1 = pe.courseid AND e.customint3 = pgm.groupid AND e.enrol = 'metagroup' AND e.status = :enrolstatus $onecourse)
+              JOIN {enrol} e ON (COALESCE(e.customint4, e.customint1) = pe.courseid AND COALESCE(e.customint5, e.customint3) = pgm.groupid AND e.enrol = 'metagroup' AND e.status = :enrolstatus $onecourse)
               JOIN {user} u ON (u.id = pue.userid AND u.deleted = 0)
          LEFT JOIN {user_enrolments} ue ON (ue.enrolid = e.id AND ue.userid = pue.userid)
          LEFT JOIN {groups_members} gm ON (gm.userid = pue.userid AND e.customint2 = gm.groupid AND gm.itemid = e.id)
@@ -398,9 +536,10 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
         $instance = $instances[$ue->enrolid];
 
         if (!$syncall) {
-            // Проверяем, есть ли у текущего пользователя какие-либо синхронизируемые роли (в исходном курсе).
+            // Проверяем, есть ли у текущего пользователя какие-либо синхронизируемые роли (в корневом курсе).
             // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
-            $parentcontext = context_course::instance($instance->customint1);
+            $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
+            $parentcontext = context_course::instance($root_courseid);
             list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
             $params['contextid'] = $parentcontext->id;
             $params['userid'] = $ue->userid;
@@ -499,7 +638,7 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
          LEFT JOIN ({user_enrolments} xpue
                       JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol <> 'metagroup' AND xpe.enrol $enabled)
                       JOIN {groups_members} xpgm ON (xpgm.userid = xpue.userid)
-                   ) ON (xpe.courseid = e.customint1 AND xpue.userid = ue.userid AND xpgm.groupid = e.customint3)
+                   ) ON (xpe.courseid = COALESCE(e.customint4, e.customint1) AND xpue.userid = ue.userid AND xpgm.groupid = COALESCE(e.customint5, e.customint3))
              WHERE xpue.userid IS NULL OR (gm.id IS NOT NULL AND e.customint2 <> gm.groupid)";
 
     $rs = $DB->get_recordset_sql($sql, $params);
@@ -609,8 +748,8 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
               JOIN {user_enrolments} xpue ON (xpue.userid = ue.userid)
               JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol <> 'metagroup'
-                   AND xpe.enrol $enabled AND xpe.courseid = e.customint1)
-              JOIN {groups_members} pgm ON (pgm.userid = ue.userid AND e.customint3 = pgm.groupid)
+                   AND xpe.enrol $enabled AND xpe.courseid = COALESCE(e.customint4, e.customint1))
+              JOIN {groups_members} pgm ON (pgm.userid = ue.userid AND COALESCE(e.customint5, e.customint3) = pgm.groupid)
           GROUP BY ue.userid, ue.enrolid
             HAVING (MIN(xpue.status + xpe.status) = 0 AND MIN(ue.status) > 0)
                    OR (MIN(xpue.status + xpe.status) > 0 AND MIN(ue.status) = 0)
@@ -646,7 +785,8 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
         if ($ue->pstatus == ENROL_USER_ACTIVE and (!$ue->ptimeend || $ue->ptimeend > time())
                 and !$syncall and $unenrolaction != ENROL_EXT_REMOVED_UNENROL) {
             // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
-            $parentcontext = context_course::instance($instance->customint1);
+            $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
+            $parentcontext = context_course::instance($root_courseid);
             list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
             $params['contextid'] = $parentcontext->id;
             $params['userid'] = $ue->userid;
@@ -702,7 +842,7 @@ function enrol_metagroup_sync_roles_assign($courseid, $verbose, $metagroup, $all
               FROM {role_assignments} pra
               JOIN {user} u ON (u.id = pra.userid AND u.deleted = 0)
               JOIN {context} pc ON (pc.id = pra.contextid AND pc.contextlevel = :coursecontext AND pra.component $enabled)
-              JOIN {enrol} e ON (e.customint1 = pc.instanceid AND e.enrol = 'metagroup' $onecourse AND e.status = :enabledinstance)
+              JOIN {enrol} e ON (COALESCE(e.customint4, e.customint1) = pc.instanceid AND e.enrol = 'metagroup' $onecourse AND e.status = :enabledinstance)
               JOIN {user_enrolments} ue ON (ue.enrolid = e.id AND ue.userid = u.id AND ue.status = :activeuser)
               JOIN {context} c ON (c.contextlevel = pc.contextlevel AND c.instanceid = e.courseid)
          LEFT JOIN {role_assignments} ra ON (ra.contextid = c.id AND ra.userid = pra.userid AND ra.roleid = pra.roleid AND ra.itemid = e.id AND ra.component = 'enrol_metagroup')
@@ -753,7 +893,7 @@ function enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $a
     $sql = "SELECT ra.roleid, ra.userid, ra.contextid, ra.itemid, e.courseid
               FROM {role_assignments} ra
               JOIN {enrol} e ON (e.id = ra.itemid AND ra.component = 'enrol_metagroup' AND e.enrol = 'metagroup' $onecourse)
-              JOIN {context} pc ON (pc.instanceid = e.customint1 AND pc.contextlevel = :coursecontext)
+              JOIN {context} pc ON (pc.instanceid = COALESCE(e.customint4, e.customint1) AND pc.contextlevel = :coursecontext)
          LEFT JOIN {role_assignments} pra ON (pra.contextid = pc.id AND pra.userid = ra.userid AND pra.roleid = ra.roleid AND pra.component <> 'enrol_metagroup' $notignored)
          LEFT JOIN {user_enrolments} ue ON (ue.enrolid = e.id AND ue.userid = ra.userid AND ue.status = :activeuser)
              WHERE pra.id IS NULL OR ue.id IS NULL OR e.status <> :enabledinstance";
