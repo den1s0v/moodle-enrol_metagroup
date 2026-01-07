@@ -174,8 +174,14 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
         }
 
         // Does anything want to sync with this parent?
-        if (!$enrols = $DB->get_records('enrol', array('customint1' => $event->objectid, 'enrol' => 'metagroup'),
-                'courseid ASC, id ASC')) {
+        // Проверяем как логические (customint1), так и корневые (customint4) курсы.
+        // При удалении курса нужно обработать все связи, которые на него ссылаются.
+        if (!$enrols = $DB->get_records_sql(
+            "SELECT * FROM {enrol}
+             WHERE enrol = 'metagroup'
+             AND (customint1 = ? OR customint4 = ?)
+             ORDER BY courseid ASC, id ASC",
+            array($event->objectid, $event->objectid))) {
             return true;
         }
 
@@ -220,12 +226,65 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
         }
 
         // Does anything want to sync with this parent?
+        // Проверяем как логические (customint1), так и корневые (customint4) курсы.
         $affectedcourses = $DB->get_fieldset_sql('SELECT DISTINCT courseid FROM {enrol} '.
-                'WHERE customint1 = ? AND enrol = ?',
-                array($event->courseid, 'metagroup'));
+                'WHERE (customint1 = ? OR customint4 = ?) AND enrol = ?',
+                array($event->courseid, $event->courseid, 'metagroup'));
 
         foreach ($affectedcourses as $courseid) {
             enrol_metagroup_sync($courseid);
+        }
+
+        return true;
+    }
+
+    /**
+     * Triggered via enrol_instance_deleted event.
+     * Обрабатывает удаление метагрупповой связи и пересчитывает корневые курсы для зависимых связей.
+     *
+     * @param \core\event\enrol_instance_deleted $event
+     * @return boolean
+     */
+    public static function enrol_instance_deleted(\core\event\enrol_instance_deleted $event) {
+        global $DB, $CFG;
+
+        if (!enrol_is_enabled('metagroup')) {
+            return true;
+        }
+
+        // Если удалена метагрупповая связь, нужно обработать зависимые связи.
+        if ($event->other['enrol'] !== 'metagroup') {
+            return true;
+        }
+
+        $deleted_courseid = $event->courseid;
+        require_once($CFG->dirroot.'/enrol/metagroup/locallib.php');
+
+        // Находим все связи, которые используют удалённый курс как логический (customint1) или корневой (customint4).
+        // Это могут быть как прямые зависимости, так и транзитивные.
+        $dependent_enrols = $DB->get_records_sql(
+            "SELECT e.* FROM {enrol} e
+             WHERE e.enrol = 'metagroup'
+             AND (e.customint1 = ? OR e.customint4 = ?)",
+            array($deleted_courseid, $deleted_courseid)
+        );
+
+        foreach ($dependent_enrols as $enrol) {
+            // Если удалённый курс был корневым (customint4), связь становится невалидной.
+            if ($enrol->customint4 == $deleted_courseid) {
+                // Корневой курс удалён - обрабатываем как потерянную связь.
+                enrol_metagroup_deal_with_lost_link($enrol);
+                continue;
+            }
+
+            // Если удалённый курс был логическим (customint1), но не корневым,
+            // это означает, что промежуточная связь была удалена.
+            // Например: была цепочка A → B → C, где B → C использует A как корневой (customint4) и B как логический (customint1).
+            // При удалении связи A → B, связь B → C теряет логический курс, но корневой (A) остаётся.
+            // В этом случае помечаем связь как потерянную, так как логический курс недоступен.
+            if ($enrol->customint1 == $deleted_courseid) {
+                enrol_metagroup_deal_with_lost_link($enrol);
+            }
         }
 
         return true;
@@ -258,8 +317,14 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
         }
 
         // Проверяем, связана ли группа с метагруппой.
-        $enrol = $DB->get_record('enrol', array('customint3' => $event->objectid, 'enrol' => 'metagroup'));
-        if ($enrol) {
+        // Проверяем как логические (customint3), так и корневые (customint5) группы.
+        $enrols = $DB->get_records_sql(
+            "SELECT * FROM {enrol}
+             WHERE enrol = 'metagroup'
+             AND (customint3 = ? OR customint5 = ?)",
+            array($event->objectid, $event->objectid)
+        );
+        foreach ($enrols as $enrol) {
             // Синхронизируем зачисления.
             enrol_metagroup_sync($enrol->courseid);
         }
@@ -275,8 +340,14 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
         }
 
         // Проверяем, связана ли удалённая группа с метагруппой.
-        $enrol = $DB->get_record('enrol', array('customint3' => $event->objectid, 'enrol' => 'metagroup'));
-        if ($enrol) {
+        // Проверяем как логические (customint3), так и корневые (customint5) группы.
+        $enrols = $DB->get_records_sql(
+            "SELECT * FROM {enrol}
+             WHERE enrol = 'metagroup'
+             AND (customint3 = ? OR customint5 = ?)",
+            array($event->objectid, $event->objectid)
+        );
+        foreach ($enrols as $enrol) {
             enrol_metagroup_deal_with_lost_link($enrol);
         }
     }
