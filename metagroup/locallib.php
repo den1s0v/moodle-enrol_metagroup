@@ -1104,18 +1104,45 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
     else
         $groupname = groups_get_group($linkedgroupid, 'name', MUST_EXIST)->name;
 
-    $a = new stdClass();
-    $a->name = $groupname;
-    $a->increment = '';
-    $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
+    // Шаг 1: Удаляем существующий инкремент вида " (N)" в конце имени
+    $groupname = preg_replace('/ \(\d+\)$/', '', $groupname);
+
+    // Шаг 2: Проверяем, заканчивается ли имя на суффикс (с учетом возможного инкремента)
+    $suffixes = [' (связ.)', ' (linked)'];
+    $has_suffix = false;
+    foreach ($suffixes as $suffix) {
+        if (mb_substr($groupname, -mb_strlen($suffix)) === $suffix) {
+            $has_suffix = true;
+            break;
+        }
+        // Проверяем также с инкрементом вида " (связ.) (2)"
+        if (preg_match('/' . preg_quote($suffix, '/') . ' \(\d+\)$/', $groupname)) {
+            $has_suffix = true;
+            break;
+        }
+    }
+
+    // Шаг 3: Применяем шаблон только если суффикс отсутствует
+    if (!$has_suffix) {
+        $a = new stdClass();
+        $a->name = $groupname;
+        $a->increment = '';
+        $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
+    }
 
     // Check to see if the group name already exists in this course.
     // Add an incremented number if it does.
     $inc = 1;
     while ($DB->record_exists('groups', array('name' => $groupname, 'courseid' => $courseid))) {
         if ($always_create_new) {
-            $a->increment = '(' . (++$inc) . ')';
-            $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
+            // Если суффикс уже есть, добавляем инкремент напрямую
+            if ($has_suffix) {
+                $groupname = $groupname . ' (' . (++$inc) . ')';
+            } else {
+                // Если суффикса нет, используем шаблон с инкрементом
+                $a->increment = '(' . (++$inc) . ')';
+                $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
+            }
 
         } else {
             // Return id.
