@@ -1082,7 +1082,7 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
 
                 // Проверяем, что customint2 содержит валидный ID группы
                 if ($enrol->customint2 <= 0) {
-                    continue;
+                    break;
                 }
                 $target_group_members = groups_get_members($enrol->customint2);
                 if ($target_group_members) {
