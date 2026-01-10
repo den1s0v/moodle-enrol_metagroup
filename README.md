@@ -46,6 +46,333 @@ As opposed to `Linked meta-course` enrol method, this plugin deals with separate
 4) The enrol entry (as well as all enrolled paricipants) can be suspended or removed as usual — in Participants → Enrolment methods.
 
 
+## PUBLIC API FOR PROGRAMMATIC ACCESS
+
+Starting from version 2.1, the plugin provides a public API for programmatic creation, deletion, and retrieval of metagroup links. This API is designed for bulk synchronization from external sources (e.g., database sync plugins).
+
+### Available Functions
+
+#### `enrol_metagroup_create_link()`
+
+Creates a metagroup link between source and target groups programmatically.
+
+**Signature:**
+```php
+function enrol_metagroup_create_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null,
+    array $options = []
+): stdClass|false
+```
+
+**Parameters:**
+- `$target_courseid` - ID of the target course (where students will be enrolled)
+- `$source_courseid` - ID of the source course (where source group is located)
+- `$source_groupid` - ID of the source group
+- `$target_groupid` - ID of the target group (if `null`, will be created automatically)
+- `$options` - Optional array with additional options:
+  - `'target_group_name'` => string|null - Optional explicit name for target group (avoids automatic suffix)
+  - `'status'` => ENROL_INSTANCE_ENABLED|ENROL_INSTANCE_DISABLED (default: ENABLED)
+  - `'roleid'` => int - Assigned role ID (default: student role)
+  - `'sync_on_create'` => bool - Whether to sync immediately after creation (default: true)
+
+**Returns:**
+- Full enrolment instance object (`stdClass`) on success
+- `false` on failure
+
+**Examples:**
+```php
+// Create link with automatic target group creation
+$instance = enrol_metagroup_create_link(
+    $target_courseid = 5,
+    $source_courseid = 3,
+    $source_groupid = 10,
+    $target_groupid = null  // will be created automatically
+);
+// $instance->id contains the created instance ID
+
+// Create link with explicit target group name (no automatic suffix)
+$instance = enrol_metagroup_create_link(
+    $target_courseid = 5,
+    $source_courseid = 3,
+    $source_groupid = 10,
+    $target_groupid = null,
+    ['target_group_name' => 'My Custom Group Name']
+);
+
+// Create link with existing target group
+$instance = enrol_metagroup_create_link(
+    $target_courseid = 5,
+    $source_courseid = 3,
+    $source_groupid = 10,
+    $target_groupid = 15  // use existing group
+);
+```
+
+#### `enrol_metagroup_delete_link()`
+
+Deletes a metagroup link by its parameters.
+
+**Signature:**
+```php
+function enrol_metagroup_delete_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null
+): bool
+```
+
+**Parameters:**
+- `$target_courseid` - ID of the target course
+- `$source_courseid` - ID of the source course
+- `$source_groupid` - ID of the source group
+- `$target_groupid` - Optional: ID of the target group (for more precise matching)
+
+**Returns:**
+- `true` on success
+- `false` on failure or if link not found
+
+**Example:**
+```php
+$deleted = enrol_metagroup_delete_link(
+    $target_courseid = 5,
+    $source_courseid = 3,
+    $source_groupid = 10
+);
+```
+
+#### `enrol_metagroup_find_link()`
+
+Finds an existing metagroup link by its parameters.
+
+**Signature:**
+```php
+function enrol_metagroup_find_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null
+): stdClass|false
+```
+
+**Parameters:**
+- Same as `enrol_metagroup_delete_link()`
+
+**Returns:**
+- Enrolment instance object (`stdClass`) on success
+- `false` if not found
+
+**Example:**
+```php
+$link = enrol_metagroup_find_link(5, 3, 10);
+if ($link) {
+    // Link exists, $link contains full enrolment instance
+}
+```
+
+#### `enrol_metagroup_get_all_links()`
+
+Gets all metagroup links in a unified format. Returns data in a format that doesn't require decoding custom fields, making it ideal for bulk synchronization.
+
+**Signature:**
+```php
+function enrol_metagroup_get_all_links(
+    int|null $target_courseid = null,
+    int|null $source_courseid = null
+): array
+```
+
+**Parameters:**
+- `$target_courseid` - Optional: filter by target course ID
+- `$source_courseid` - Optional: filter by source course ID
+
+**Returns:**
+Array of link objects, each containing:
+- `id` => int - Enrolment instance ID
+- `target_courseid` => int - Target course ID (courseid)
+- `source_courseid` => int - Logical source course ID (customint1)
+- `source_groupid` => int - Logical source group ID (customint3)
+- `target_groupid` => int - Target group ID (customint2)
+- `root_courseid` => int|null - Root source course ID (customint4, if exists)
+- `root_groupid` => int|null - Root source group ID (customint5, if exists)
+- `status` => int - ENROL_INSTANCE_ENABLED or DISABLED
+- `roleid` => int - Assigned role ID
+- `source_group_name` => string - Cached source group name (customchar2)
+- `root_course_name` => string|null - Root course name (customchar1, if exists)
+- `root_group_name` => string|null - Root group name (customchar3, if exists)
+
+**Example:**
+```php
+// Get all links
+$all_links = enrol_metagroup_get_all_links();
+foreach ($all_links as $link) {
+    echo "Link {$link->id}: Course {$link->source_courseid} → {$link->target_courseid}\n";
+}
+
+// Get links for specific target course
+$course_links = enrol_metagroup_get_all_links($target_courseid = 5);
+
+// Get links from specific source course
+$source_links = enrol_metagroup_get_all_links(null, $source_courseid = 3);
+```
+
+### Bulk Synchronization Example
+
+```php
+// Get all existing links from database
+$existing_links = enrol_metagroup_get_all_links();
+
+// Get desired links from external source (e.g., database)
+$desired_links = get_desired_links_from_external_source();
+
+// Create missing links
+foreach ($desired_links as $desired) {
+    $found = false;
+    foreach ($existing_links as $existing) {
+        if ($existing->target_courseid == $desired->target_courseid &&
+            $existing->source_courseid == $desired->source_courseid &&
+            $existing->source_groupid == $desired->source_groupid) {
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        enrol_metagroup_create_link(
+            $desired->target_courseid,
+            $desired->source_courseid,
+            $desired->source_groupid,
+            $desired->target_groupid,
+            ['target_group_name' => $desired->target_group_name]
+        );
+    }
+}
+
+// Delete links that should not exist
+foreach ($existing_links as $existing) {
+    $should_exist = false;
+    foreach ($desired_links as $desired) {
+        if ($existing->target_courseid == $desired->target_courseid &&
+            $existing->source_courseid == $desired->source_courseid &&
+            $existing->source_groupid == $desired->source_groupid) {
+            $should_exist = true;
+            break;
+        }
+    }
+    if (!$should_exist) {
+        enrol_metagroup_delete_link(
+            $existing->target_courseid,
+            $existing->source_courseid,
+            $existing->source_groupid
+        );
+    }
+}
+```
+
+(На русском:)
+
+## ПУБЛИЧНЫЙ API ДЛЯ ПРОГРАММНОГО ДОСТУПА
+
+Начиная с версии 2.1, плагин предоставляет публичный API для программного создания, удаления и получения метагрупповых связей. Этот API предназначен для массовой синхронизации из внешних источников (например, плагинов синхронизации с базой данных).
+
+### Доступные функции
+
+#### `enrol_metagroup_create_link()`
+
+Создает метагрупповую связь между группами-источниками и группами-назначениями программно.
+
+**Сигнатура:**
+```php
+function enrol_metagroup_create_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null,
+    array $options = []
+): stdClass|false
+```
+
+**Параметры:**
+- `$target_courseid` - ID целевого курса (куда будут зачислены студенты)
+- `$source_courseid` - ID курса-источника (где находится группа-источник)
+- `$source_groupid` - ID группы-источника
+- `$target_groupid` - ID целевой группы (если `null`, будет создана автоматически)
+- `$options` - Опциональный массив с дополнительными опциями:
+  - `'target_group_name'` => string|null - Опциональное явное имя целевой группы (избегает автоматического суффикса)
+  - `'status'` => ENROL_INSTANCE_ENABLED|ENROL_INSTANCE_DISABLED (по умолчанию: ENABLED)
+  - `'roleid'` => int - ID назначаемой роли (по умолчанию: роль студента)
+  - `'sync_on_create'` => bool - Синхронизировать ли сразу после создания (по умолчанию: true)
+
+**Возвращает:**
+- Полный объект экземпляра enrolment (`stdClass`) при успехе
+- `false` при ошибке
+
+#### `enrol_metagroup_delete_link()`
+
+Удаляет метагрупповую связь по её параметрам.
+
+**Сигнатура:**
+```php
+function enrol_metagroup_delete_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null
+): bool
+```
+
+**Возвращает:**
+- `true` при успехе
+- `false` при ошибке или если связь не найдена
+
+#### `enrol_metagroup_find_link()`
+
+Находит существующую метагрупповую связь по её параметрам.
+
+**Сигнатура:**
+```php
+function enrol_metagroup_find_link(
+    int $target_courseid,
+    int $source_courseid,
+    int $source_groupid,
+    int|null $target_groupid = null
+): stdClass|false
+```
+
+**Возвращает:**
+- Объект экземпляра enrolment (`stdClass`) при успехе
+- `false` если не найдена
+
+#### `enrol_metagroup_get_all_links()`
+
+Получает все метагрупповые связи в унифицированном формате. Возвращает данные в формате, который не требует расшифровки кастомных полей, что идеально для массовой синхронизации.
+
+**Сигнатура:**
+```php
+function enrol_metagroup_get_all_links(
+    int|null $target_courseid = null,
+    int|null $source_courseid = null
+): array
+```
+
+**Возвращает:**
+Массив объектов связей, каждый содержит:
+- `id` => int - ID экземпляра enrolment
+- `target_courseid` => int - ID целевого курса
+- `source_courseid` => int - ID логического курса-источника
+- `source_groupid` => int - ID логической группы-источника
+- `target_groupid` => int - ID целевой группы
+- `root_courseid` => int|null - ID корневого курса-источника (если существует)
+- `root_groupid` => int|null - ID корневой группы-источника (если существует)
+- `status` => int - ENROL_INSTANCE_ENABLED или DISABLED
+- `roleid` => int - ID назначаемой роли
+- `source_group_name` => string - Кэшированное имя группы-источника
+- `root_course_name` => string|null - Имя корневого курса (если существует)
+- `root_group_name` => string|null - Имя корневой группы (если существует)
+
+
 ## TRANSITIVE (CHAIN) LINKS
 
 Starting from version 2.0, the plugin supports transitive (chain) links between courses. This allows creating metagroup links from child courses to third courses, even if you don't have direct access to the root course.
