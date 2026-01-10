@@ -204,7 +204,7 @@ class enrol_metagroup_handler {
                 $ue->timeend = $parenttimeend;
 
                 // Ensure user is in target group.
-                if ($instance->customint2 &&
+                if ($instance->customint2 && $instance->customint2 > 0 &&
                     !groups_is_member($instance->customint2, $userid)) {
                     // Note: if the group is absent, this will fail; new group will be created on full sync.
                     groups_add_member($instance->customint2, $userid, 'enrol_metagroup', $instance->id);
@@ -217,7 +217,7 @@ class enrol_metagroup_handler {
             $ue->userid = $userid;
             $ue->enrolid = $instance->id;
             $ue->status = $parentstatus;
-            if ($instance->customint2) {
+            if ($instance->customint2 && $instance->customint2 > 0) {
                 // Note: if the group is absent, this will fail; new group will be created on full sync.
                 groups_add_member($instance->customint2, $userid, 'enrol_metagroup', $instance->id);
             }
@@ -571,7 +571,7 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
                 mtrace("  enrolled: $ue->userid ==> $instance->courseid");
             }
         }
-        if (!$ue->gm_id && $instance->customint2) {
+        if (!$ue->gm_id && $instance->customint2 && $instance->customint2 > 0) {
             // Ещё не член группы.
             $gid = $instance->customint2;
 
@@ -658,6 +658,13 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
 
         if ($ue->old_groupid && $ue->old_groupid != $instance->customint2) {
             // Перемещаем пользователя из старой группы в новую.
+            // Проверяем, что customint2 содержит валидный ID группы (не константу CREATE_GROUP или CREATE_SEPARATE_GROUPS)
+            if ($instance->customint2 <= 0) {
+                if ($verbose) {
+                    mtrace("  skipping group move: invalid group ID ($instance->customint2) for instance $instance->id");
+                }
+                continue;
+            }
             $ok = groups_add_member($instance->customint2, $ue->userid, 'enrol_metagroup', $instance->id);
             if ($verbose) {
                 mtrace("  added user to group: $ue->userid ==> $instance->customint2 in course $instance->courseid (success: $ok).");
@@ -1073,6 +1080,10 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
                 // и удаляем всех пользователей, чтобы группа могла быть очищена.
                 $plugin->update_status($enrol, ENROL_INSTANCE_DISABLED, false);
 
+                // Проверяем, что customint2 содержит валидный ID группы
+                if ($enrol->customint2 <= 0) {
+                    continue;
+                }
                 $target_group_members = groups_get_members($enrol->customint2);
                 if ($target_group_members) {
                     foreach($target_group_members as $student) {

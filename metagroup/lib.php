@@ -315,6 +315,21 @@ class enrol_metagroup_plugin extends enrol_plugin {
             require_capability('moodle/course:managegroups', $context);
 
             $groupid = enrol_metagroup_create_new_group($instance->courseid, $data->customint3);
+            if (!$groupid || $groupid <= 0) {
+                throw new moodle_exception('error', 'enrol_metagroup', '', 'Failed to create target group');
+            }
+            $data->customint2 = $groupid;
+        } else if (!empty($data->customint2) && $data->customint2 == ENROL_METAGROUP_CREATE_SEPARATE_GROUPS) {
+            // When editing, CREATE_SEPARATE_GROUPS should not be allowed as it's only for creation with multiple groups.
+            // If this value is set during update, it means user wants to create a new group for the single source group.
+            // Convert it to CREATE_GROUP behavior.
+            $context = context_course::instance($instance->courseid);
+            require_capability('moodle/course:managegroups', $context);
+
+            $groupid = enrol_metagroup_create_new_group($instance->courseid, $data->customint3);
+            if (!$groupid || $groupid <= 0) {
+                throw new moodle_exception('error', 'enrol_metagroup', '', 'Failed to create target group');
+            }
             $data->customint2 = $groupid;
         }
 
