@@ -481,11 +481,11 @@ class enrol_metagroup_plugin extends enrol_plugin {
         $courseid = $coursecontext->instanceid;
 
         if (has_capability('moodle/course:managegroups', $coursecontext)) {
-            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_one', 'enrol_metagroup');
-
             if ($source_groups_count == 'many') {
                 $groups[ENROL_METAGROUP_CREATE_SEPARATE_GROUPS] = get_string('creategroup_many', 'enrol_metagroup');
             }
+
+            $groups[ENROL_METAGROUP_CREATE_GROUP] = get_string('creategroup_one', 'enrol_metagroup');
         }
 
         foreach (groups_get_all_groups($courseid) as $group) {
