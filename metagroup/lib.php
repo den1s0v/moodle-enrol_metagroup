@@ -510,12 +510,21 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         $groups_with_members = groups_get_all_groups($courseid, 0, 0, 'g.*', true);
 
-        // Exclude groups that have already linked to this course.
-        $records = $DB->get_records('enrol', [
-            'courseid' => $coursecontext->instanceid,
-            'customint1' => $courseid,
-        ], '', 'customint3');
-        $already_linked_groups = array_keys($records);
+        // Exclude groups that are already used in any metagroup enrolment instance on this course.
+        // Check both customint3 (logical source group) and customint5 (root group for transitive links).
+        // Get all non-zero customint3 and all non-zero customint5 values without priorities.
+        $sql = "SELECT DISTINCT groupid
+                FROM (
+                    SELECT customint3 AS groupid
+                    FROM {enrol}
+                    WHERE enrol = 'metagroup' AND courseid = ? AND customint3 > 0
+                    UNION
+                    SELECT customint5 AS groupid
+                    FROM {enrol}
+                    WHERE enrol = 'metagroup' AND courseid = ? AND customint5 > 0
+                ) AS combined";
+        $used_groups = $DB->get_fieldset_sql($sql, [$coursecontext->instanceid, $coursecontext->instanceid]);
+        $already_linked_groups = array_filter($used_groups); // Remove null/zero values
 
         $group_options = [];
 
