@@ -1160,3 +1160,244 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
 
     return $groupid;
 }
+
+/**
+ * Create a metagroup link between source and target groups.
+ * 
+ * Public API function for creating metagroup enrolment instances programmatically.
+ * Can be called from other plugins for bulk synchronization.
+ * 
+ * @param int $target_courseid ID of the target course (where students will be enrolled)
+ * @param int $source_courseid ID of the source course (where source group is located)
+ * @param int $source_groupid ID of the source group
+ * @param int|null $target_groupid ID of the target group (if null, will be created automatically)
+ * @param array $options Optional array with additional options:
+ *   - 'target_group_name' => string|null (optional explicit name for target group, avoids automatic suffix)
+ *   - 'status' => ENROL_INSTANCE_ENABLED|ENROL_INSTANCE_DISABLED (default: ENABLED)
+ *   - 'roleid' => int (default: student role)
+ *   - 'sync_on_create' => bool (default: true, whether to sync immediately after creation)
+ * @return stdClass|false Full enrolment instance object on success, false on failure
+ */
+function enrol_metagroup_create_link($target_courseid, $source_courseid, $source_groupid, $target_groupid = null, $options = []) {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot.'/enrol/metagroup/lib.php');
+    require_once($CFG->dirroot.'/group/lib.php');
+
+    // Validate input parameters
+    if (empty($target_courseid) || empty($source_courseid) || empty($source_groupid)) {
+        return false;
+    }
+
+    // Check if courses exist
+    if (!$DB->record_exists('course', ['id' => $target_courseid])) {
+        return false;
+    }
+    if (!$DB->record_exists('course', ['id' => $source_courseid])) {
+        return false;
+    }
+
+    // Check if source group exists
+    if (!$DB->record_exists('groups', ['id' => $source_groupid, 'courseid' => $source_courseid])) {
+        return false;
+    }
+
+    // Check for duplicates
+    $conditions = [
+        'courseid' => $target_courseid,
+        'enrol' => 'metagroup',
+        'customint1' => $source_courseid,
+        'customint3' => $source_groupid,
+    ];
+    if ($target_groupid !== null) {
+        $conditions['customint2'] = $target_groupid;
+    }
+    $existing = $DB->get_record('enrol', $conditions);
+    if ($existing) {
+        return $existing;
+    }
+
+    // If target_groupid is null, create group automatically
+    if ($target_groupid === null) {
+        $target_group_name = $options['target_group_name'] ?? null;
+        $target_groupid = enrol_metagroup_create_new_group(
+            $target_courseid,
+            $source_groupid,
+            $target_group_name  // If specified, uses this name without suffixes
+        );
+        if (!$target_groupid) {
+            return false;
+        }
+    } else {
+        // Validate that target group exists
+        if (!$DB->record_exists('groups', ['id' => $target_groupid, 'courseid' => $target_courseid])) {
+            return false;
+        }
+    }
+
+    // Prepare fields for add_instance
+    $fields = [
+        'courseid' => $target_courseid,
+        'enrol' => 'metagroup',
+        'status' => $options['status'] ?? ENROL_INSTANCE_ENABLED,
+        'roleid' => $options['roleid'] ?? null,
+        'customint1' => $source_courseid,  // source course
+        'customint2' => $target_groupid,  // target group
+        'customint3' => $source_groupid,  // source group
+    ];
+
+    // Get course object
+    $course = get_course($target_courseid);
+    if (!$course) {
+        return false;
+    }
+
+    // Get plugin instance
+    $plugin = enrol_get_plugin('metagroup');
+    if (!$plugin) {
+        return false;
+    }
+
+    // Create instance
+    try {
+        $instance_id = $plugin->add_instance($course, $fields);
+        if (!$instance_id) {
+            return false;
+        }
+
+        // Get full enrolment instance object
+        $instance = $DB->get_record('enrol', ['id' => $instance_id]);
+        if (!$instance) {
+            return false;
+        }
+
+        return $instance;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
+ * Find existing metagroup link by its parameters.
+ * 
+ * @param int $target_courseid ID of the target course
+ * @param int $source_courseid ID of the source course
+ * @param int $source_groupid ID of the source group
+ * @param int|null $target_groupid Optional: ID of the target group
+ * @return stdClass|false Enrolment instance object on success, false if not found
+ */
+function enrol_metagroup_find_link($target_courseid, $source_courseid, $source_groupid, $target_groupid = null) {
+    global $DB;
+
+    $conditions = [
+        'courseid' => $target_courseid,
+        'enrol' => 'metagroup',
+        'customint1' => $source_courseid,
+        'customint3' => $source_groupid,
+    ];
+    if ($target_groupid !== null) {
+        $conditions['customint2'] = $target_groupid;
+    }
+
+    return $DB->get_record('enrol', $conditions);
+}
+
+/**
+ * Delete a metagroup link by its parameters.
+ * 
+ * Public API function for deleting metagroup enrolment instances programmatically.
+ * Can be called from other plugins for bulk synchronization.
+ * 
+ * @param int $target_courseid ID of the target course
+ * @param int $source_courseid ID of the source course
+ * @param int $source_groupid ID of the source group
+ * @param int|null $target_groupid Optional: ID of the target group (for more precise matching)
+ * @return bool True on success, false on failure or if link not found
+ */
+function enrol_metagroup_delete_link($target_courseid, $source_courseid, $source_groupid, $target_groupid = null) {
+    global $CFG;
+
+    require_once($CFG->dirroot.'/enrol/metagroup/lib.php');
+
+    // Find the link
+    $instance = enrol_metagroup_find_link($target_courseid, $source_courseid, $source_groupid, $target_groupid);
+    if (!$instance) {
+        return false;
+    }
+
+    // Get plugin instance
+    $plugin = enrol_get_plugin('metagroup');
+    if (!$plugin) {
+        return false;
+    }
+
+    // Delete instance
+    try {
+        $plugin->delete_instance($instance);
+        return true;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
+ * Get all metagroup links in a unified format.
+ * 
+ * Public API function for retrieving all metagroup enrolment instances.
+ * Returns data in a format that doesn't require decoding custom fields.
+ * Useful for bulk synchronization from external sources.
+ * 
+ * @param int|null $target_courseid Optional: filter by target course ID
+ * @param int|null $source_courseid Optional: filter by source course ID
+ * @return array Array of link objects, each containing:
+ *   - 'id' => int (enrolment instance ID)
+ *   - 'target_courseid' => int (courseid)
+ *   - 'source_courseid' => int (customint1 - logical source course)
+ *   - 'source_groupid' => int (customint3 - logical source group)
+ *   - 'target_groupid' => int (customint2)
+ *   - 'root_courseid' => int|null (customint4 - root source course, if exists)
+ *   - 'root_groupid' => int|null (customint5 - root source group, if exists)
+ *   - 'status' => int (ENROL_INSTANCE_ENABLED or DISABLED)
+ *   - 'roleid' => int (assigned role ID)
+ *   - 'source_group_name' => string (customchar2 - cached source group name)
+ *   - 'root_course_name' => string|null (customchar1 - root course name, if exists)
+ *   - 'root_group_name' => string|null (customchar3 - root group name, if exists)
+ */
+function enrol_metagroup_get_all_links($target_courseid = null, $source_courseid = null) {
+    global $DB;
+
+    // Build SQL query with optional filters
+    $conditions = ['enrol' => 'metagroup'];
+    $params = [];
+
+    if ($target_courseid !== null) {
+        $conditions['courseid'] = $target_courseid;
+    }
+    if ($source_courseid !== null) {
+        $conditions['customint1'] = $source_courseid;
+    }
+
+    // Get all records
+    $records = $DB->get_records('enrol', $conditions, 'id ASC');
+
+    // Transform to unified format
+    $links = [];
+    foreach ($records as $record) {
+        $link = new stdClass();
+        $link->id = $record->id;
+        $link->target_courseid = $record->courseid;
+        $link->source_courseid = $record->customint1;
+        $link->source_groupid = $record->customint3;
+        $link->target_groupid = $record->customint2;
+        $link->root_courseid = !empty($record->customint4) ? $record->customint4 : null;
+        $link->root_groupid = !empty($record->customint5) ? $record->customint5 : null;
+        $link->status = $record->status;
+        $link->roleid = $record->roleid;
+        $link->source_group_name = $record->customchar2 ?? '';
+        $link->root_course_name = !empty($record->customchar1) ? $record->customchar1 : null;
+        $link->root_group_name = !empty($record->customchar3) ? $record->customchar3 : null;
+        $links[] = $link;
+    }
+
+    return $links;
+}
