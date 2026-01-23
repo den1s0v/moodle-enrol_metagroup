@@ -1084,6 +1084,10 @@ function enrol_metagroup_deal_with_lost_link($enrol) {
                 if ($enrol->customint2 <= 0) {
                     break;
                 }
+                // Проверяем, что группа существует перед использованием
+                if (!$DB->record_exists('groups', ['id' => $enrol->customint2, 'courseid' => $enrol->courseid])) {
+                    break;
+                }
                 $target_group_members = groups_get_members($enrol->customint2);
                 if ($target_group_members) {
                     foreach($target_group_members as $student) {
