@@ -1213,21 +1213,96 @@ function enrol_metagroup_create_link($target_courseid, $source_courseid, $source
         return false;
     }
 
-    // Check for duplicates
+    // Check for existing link (including suspended ones) - search without target_groupid filter first
     $conditions = [
         'courseid' => $target_courseid,
         'enrol' => 'metagroup',
         'customint1' => $source_courseid,
         'customint3' => $source_groupid,
     ];
-    if ($target_groupid !== null) {
-        $conditions['customint2'] = $target_groupid;
-    }
+    // Don't filter by target_groupid when searching - we want to find existing link regardless
     $existing = $DB->get_record('enrol', $conditions);
+
     if ($existing) {
+        // Update existing link: activate and update parameters
+        $update_data = new stdClass();
+        $update_data->id = $existing->id;
+        $update_data->status = $options['status'] ?? ENROL_INSTANCE_ENABLED;
+        
+        if (isset($options['roleid'])) {
+            $update_data->roleid = $options['roleid'];
+        }
+        
+        // Check if existing link has invalid target group and needs new one
+        $needs_new_group = false;
+        if ($existing->customint2 <= 0 || !$DB->record_exists('groups', ['id' => $existing->customint2, 'courseid' => $target_courseid])) {
+            $needs_new_group = true;
+        }
+        
+        // If target_groupid is null, create group automatically
+        if ($target_groupid === null || $needs_new_group) {
+            $target_group_name = $options['target_group_name'] ?? null;
+            $target_groupid = enrol_metagroup_create_new_group(
+                $target_courseid,
+                $source_groupid,
+                $target_group_name  // If specified, uses this name without suffixes
+            );
+            if (!$target_groupid) {
+                return false;
+            }
+            $update_data->customint2 = $target_groupid;
+        } else {
+            // Validate that target group exists
+            if (!$DB->record_exists('groups', ['id' => $target_groupid, 'courseid' => $target_courseid])) {
+                return false;
+            }
+            // Update target group if it changed
+            if ($existing->customint2 != $target_groupid) {
+                $update_data->customint2 = $target_groupid;
+            }
+        }
+        
+        // Check if source parameters changed and recalculate root values if needed
+        if ($existing->customint1 != $source_courseid || $existing->customint3 != $source_groupid) {
+            $update_data->customint1 = $source_courseid;
+            $update_data->customint3 = $source_groupid;
+            
+            // Get source group name for caching
+            $group_obj = groups_get_group($source_groupid, 'name', MUST_EXIST);
+            $update_data->customchar2 = $group_obj->name;
+            
+            // Recalculate root values
+            $root = enrol_metagroup_find_root_course($source_courseid, $source_groupid);
+            
+            if ($root && !empty($root['root_courseid'])) {
+                $update_data->customint4 = $root['root_courseid'];
+                $update_data->customint5 = $root['root_groupid'];
+                $update_data->customchar1 = $root['root_coursename'];
+                $update_data->customchar3 = $root['root_groupname'];
+            } else {
+                // If root course not found, use logical as root
+                $update_data->customint4 = $source_courseid;
+                $update_data->customint5 = $source_groupid;
+                $course_obj = get_course($source_courseid);
+                $update_data->customchar1 = $course_obj->shortname ?: $course_obj->fullname;
+                $update_data->customchar3 = $group_obj->name;
+            }
+        }
+        
+        $DB->update_record('enrol', $update_data);
+        
+        // Reload updated instance
+        $existing = $DB->get_record('enrol', ['id' => $existing->id]);
+        
+        // Sync if requested
+        if (($options['sync_on_create'] ?? true) && $update_data->status == ENROL_INSTANCE_ENABLED) {
+            enrol_metagroup_sync($target_courseid, false);
+        }
+        
         return $existing;
     }
 
+    // No existing link found - create new one
     // If target_groupid is null, create group automatically
     if ($target_groupid === null) {
         $target_group_name = $options['target_group_name'] ?? null;
