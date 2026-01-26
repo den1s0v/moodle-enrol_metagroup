@@ -464,23 +464,38 @@ function enrol_metagroup_sync_lost_links($courseid, $verbose) {
 
         $rs = $DB->get_records_sql($sql);
         $lost_links_count = 0;
+        $error_count = 0;
 
         foreach ($rs as $record) {
-            $enrols_having_link_lost[] = $record->id;
+            try {
+                $enrols_having_link_lost[] = $record->id;
 
-            if ($verbose) {
-                mtrace('dealing with a lost link: enrolid=' . ($record->id));
-            }
-            $lost_links_count += 1;
-            enrol_metagroup_deal_with_lost_link($record);
+                if ($verbose) {
+                    mtrace('dealing with a lost link: enrolid=' . ($record->id));
+                }
+                $lost_links_count += 1;
+                enrol_metagroup_deal_with_lost_link($record);
 
-            if ($lostlinkaction == ENROL_EXT_REMOVED_UNENROL) {
-                // Удаляем опустевшую группу, если включена соответствующая настройка плагина.
-                enrol_metagroup_handler::delete_empty_group_as_configured($record->customint2, $verbose);
+                if ($lostlinkaction == ENROL_EXT_REMOVED_UNENROL) {
+                    // Удаляем опустевшую группу, если включена соответствующая настройка плагина.
+                    enrol_metagroup_handler::delete_empty_group_as_configured($record->customint2, $verbose);
+                }
+            } catch (Exception $e) {
+                $error_count++;
+                if ($verbose) {
+                    mtrace("  ERROR processing lost link: " . $e->getMessage());
+                    mtrace("    Details: enrolid=" . $record->id . ", courseid=" . $record->courseid . ", customint1=" . $record->customint1 . ", customint3=" . $record->customint3);
+                }
+                error_log("enrol_metagroup sync_lost_links error: " . $e->getMessage() . 
+                          " (enrolid=" . $record->id . ", courseid=" . $record->courseid . ")");
+                continue;
             }
         }
         if ($verbose) {
             mtrace("Done dealing with $lost_links_count lost link(s).");
+            if ($error_count > 0) {
+                mtrace("Lost links processing errors: $error_count");
+            }
         }
     }
 
@@ -536,37 +551,38 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
     // Создание / восстановление зачислений пользователей и членств в группах.
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
+    $error_count = 0;
     foreach($rs as $ue) {
-
-        if(in_array($ue->enrolid, $enrols_having_link_lost)) {
-            continue;
-        }
-
-        if (!isset($instances[$ue->enrolid])) {
-            // Добавляем экземпляр в кэш.
-            $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-        }
-        $instance = $instances[$ue->enrolid];
-
-        if (!$syncall) {
-            // Проверяем, есть ли у текущего пользователя какие-либо синхронизируемые роли (в корневом курсе).
-            // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
-            $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
-            $parentcontext = context_course::instance($root_courseid);
-            list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
-            $params['contextid'] = $parentcontext->id;
-            $params['userid'] = $ue->userid;
-            $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
-            if (!$DB->record_exists_select('role_assignments', $select, $params)) {
-                // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
-                if ($verbose) {
-                    mtrace("  skipping enrolling: $ue->userid ==> $instance->courseid (user without role)");
-                }
+        try {
+            if(in_array($ue->enrolid, $enrols_having_link_lost)) {
                 continue;
             }
-        }
 
-        ++$rs_counter;
+            if (!isset($instances[$ue->enrolid])) {
+                // Добавляем экземпляр в кэш.
+                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+            }
+            $instance = $instances[$ue->enrolid];
+
+            if (!$syncall) {
+                // Проверяем, есть ли у текущего пользователя какие-либо синхронизируемые роли (в корневом курсе).
+                // Это может быть медленно, если очень много пользователей игнорируется при синхронизации.
+                $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
+                $parentcontext = context_course::instance($root_courseid);
+                list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
+                $params['contextid'] = $parentcontext->id;
+                $params['userid'] = $ue->userid;
+                $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
+                if (!$DB->record_exists_select('role_assignments', $select, $params)) {
+                    // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
+                    if ($verbose) {
+                        mtrace("  skipping enrolling: $ue->userid ==> $instance->courseid (user without role)");
+                    }
+                    continue;
+                }
+            }
+
+            ++$rs_counter;
 
         // Теперь у нас есть агрегированные значения, которые мы будем использовать для статуса зачисления метагруппы, timeend и timestart.
         // Снова используем тот факт, что active=0 и disabled/suspended=1. Только когда MIN(pue.status + pe.status)=0 зачисление активно:
@@ -614,11 +630,24 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
                 mtrace("  added to group: $ue->userid ==> $gid in course $instance->courseid (success: $ok).");
             }
         }
+        } catch (Exception $e) {
+            $error_count++;
+            if ($verbose) {
+                mtrace("  ERROR processing missing enrolment: " . $e->getMessage());
+                mtrace("    Details: userid=$ue->userid, enrolid=$ue->enrolid, courseid=" . (isset($instance) ? $instance->courseid : 'unknown'));
+            }
+            error_log("enrol_metagroup sync_missing_enrolments error: " . $e->getMessage() . 
+                      " (userid=$ue->userid, enrolid=$ue->enrolid)");
+            continue;
+        }
     }
     $rs->close();
 
     if ($verbose) {
         mtrace("Absent/incomplete enrolments processed: $rs_counter.");
+        if ($error_count > 0) {
+            mtrace("Missing enrolments processing errors: $error_count");
+        }
     }
 
     return $rs_counter;
@@ -659,13 +688,14 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
 
     $rs = $DB->get_recordset_sql($sql, $params);
     $rs_counter = 0;
+    $error_count = 0;
     foreach($rs as $ue) {
+        try {
+            if (in_array($ue->enrolid, $enrols_having_link_lost)) {
+                continue;
+            }
 
-        if (in_array($ue->enrolid, $enrols_having_link_lost)) {
-            continue;
-        }
-
-        ++$rs_counter;
+            ++$rs_counter;
 
         if (!isset($instances[$ue->enrolid])) {
             $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
@@ -736,11 +766,24 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
                 }
             }
         }
+        } catch (Exception $e) {
+            $error_count++;
+            if ($verbose) {
+                mtrace("  ERROR processing extra enrolment: " . $e->getMessage());
+                mtrace("    Details: userid=$ue->userid, enrolid=$ue->enrolid, courseid=" . (isset($instance) ? $instance->courseid : 'unknown') . ", old_groupid=" . (isset($ue->old_groupid) ? $ue->old_groupid : 'N/A'));
+            }
+            error_log("enrol_metagroup sync_extra_enrolments error: " . $e->getMessage() . 
+                      " (userid=$ue->userid, enrolid=$ue->enrolid)");
+            continue;
+        }
     }
     $rs->close();
 
     if ($verbose) {
         mtrace("Extra enrolments processed: $rs_counter.");
+        if ($error_count > 0) {
+            mtrace("Extra enrolments processing errors: $error_count");
+        }
     }
 
     return $rs_counter;
@@ -806,16 +849,17 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
                                               ELSE 0 END)
                           END) <> MAX(ue.timeend))";
     $rs = $DB->get_recordset_sql($sql, $params);
+    $error_count = 0;
     foreach($rs as $ue) {
+        try {
+            if (in_array($ue->enrolid, $enrols_having_link_lost)) {
+                continue;
+            }
 
-        if (in_array($ue->enrolid, $enrols_having_link_lost)) {
-            continue;
-        }
-
-        if (!isset($instances[$ue->enrolid])) {
-            $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-        }
-        $instance = $instances[$ue->enrolid];
+            if (!isset($instances[$ue->enrolid])) {
+                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+            }
+            $instance = $instances[$ue->enrolid];
         $ue->pstatus = ($ue->pstatus == ENROL_USER_ACTIVE + ENROL_INSTANCE_ENABLED) ? ENROL_USER_ACTIVE : ENROL_USER_SUSPENDED;
         $ue->ptimeend = ($ue->ptimeend == 9999999999) ? 0 : (int)$ue->ptimeend;
         $ue->ptimestart = ($ue->ptimestart == 9999999999) ? 0 : (int)$ue->ptimestart;
@@ -846,8 +890,22 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
                 mtrace("  suspending: $ue->userid ==> $instance->courseid");
             }
         }
+        } catch (Exception $e) {
+            $error_count++;
+            if ($verbose) {
+                mtrace("  ERROR processing status update: " . $e->getMessage());
+                mtrace("    Details: userid=$ue->userid, enrolid=$ue->enrolid, courseid=" . (isset($instance) ? $instance->courseid : 'unknown'));
+            }
+            error_log("enrol_metagroup sync_status_updates error: " . $e->getMessage() . 
+                      " (userid=$ue->userid, enrolid=$ue->enrolid)");
+            continue;
+        }
     }
     $rs->close();
+    
+    if ($verbose && $error_count > 0) {
+        mtrace("Status updates processing errors: $error_count");
+    }
 }
 
 /**
@@ -893,13 +951,29 @@ function enrol_metagroup_sync_roles_assign($courseid, $verbose, $metagroup, $all
     }
 
     $rs = $DB->get_recordset_sql($sql, $params);
+    $error_count = 0;
     foreach($rs as $ra) {
-        role_assign($ra->roleid, $ra->userid, $ra->contextid, 'enrol_metagroup', $ra->enrolid);
-        if ($verbose) {
-            mtrace("  assigning role: $ra->userid ==> $ra->courseid as ".$allroles[$ra->roleid]->shortname);
+        try {
+            role_assign($ra->roleid, $ra->userid, $ra->contextid, 'enrol_metagroup', $ra->enrolid);
+            if ($verbose) {
+                mtrace("  assigning role: $ra->userid ==> $ra->courseid as ".$allroles[$ra->roleid]->shortname);
+            }
+        } catch (Exception $e) {
+            $error_count++;
+            if ($verbose) {
+                mtrace("  ERROR processing role assignment: " . $e->getMessage());
+                mtrace("    Details: userid=$ra->userid, roleid=$ra->roleid, enrolid=$ra->enrolid, courseid=$ra->courseid");
+            }
+            error_log("enrol_metagroup sync_roles_assign error: " . $e->getMessage() . 
+                      " (userid=$ra->userid, roleid=$ra->roleid, enrolid=$ra->enrolid)");
+            continue;
         }
     }
     $rs->close();
+    
+    if ($verbose && $error_count > 0) {
+        mtrace("Role assignments processing errors: $error_count");
+    }
 }
 
 /**
@@ -938,13 +1012,29 @@ function enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $a
 
     if ($unenrolaction != ENROL_EXT_REMOVED_SUSPEND) {
         $rs = $DB->get_recordset_sql($sql, $params);
+        $error_count = 0;
         foreach($rs as $ra) {
-            role_unassign($ra->roleid, $ra->userid, $ra->contextid, 'enrol_metagroup', $ra->itemid);
-            if ($verbose) {
-                mtrace("  unassigning role: $ra->userid ==> $ra->courseid as ".$allroles[$ra->roleid]->shortname);
+            try {
+                role_unassign($ra->roleid, $ra->userid, $ra->contextid, 'enrol_metagroup', $ra->itemid);
+                if ($verbose) {
+                    mtrace("  unassigning role: $ra->userid ==> $ra->courseid as ".$allroles[$ra->roleid]->shortname);
+                }
+            } catch (Exception $e) {
+                $error_count++;
+                if ($verbose) {
+                    mtrace("  ERROR processing role unassignment: " . $e->getMessage());
+                    mtrace("    Details: userid=$ra->userid, roleid=$ra->roleid, itemid=$ra->itemid, courseid=$ra->courseid");
+                }
+                error_log("enrol_metagroup sync_roles_unassign error: " . $e->getMessage() . 
+                          " (userid=$ra->userid, roleid=$ra->roleid, itemid=$ra->itemid)");
+                continue;
             }
         }
         $rs->close();
+        
+        if ($verbose && $error_count > 0) {
+            mtrace("Role unassignments processing errors: $error_count");
+        }
     }
 }
 
@@ -960,6 +1050,8 @@ function enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $a
 function enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, &$instances, $metagroup, $unenrolaction) {
     global $DB;
 
+    $error_count = 0;
+
     if ($unenrolaction == ENROL_EXT_REMOVED_UNENROL) {
         // Отчисление.
         $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
@@ -974,13 +1066,24 @@ function enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, &$inst
                      WHERE ra.id IS NULL";
         $ues = $DB->get_recordset_sql($sql, $params);
         foreach($ues as $ue) {
-            if (!isset($instances[$ue->enrolid])) {
-                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-            }
-            $instance = $instances[$ue->enrolid];
-            $metagroup->unenrol_user($instance, $ue->userid);
-            if ($verbose) {
-                mtrace("  unenrolling: $ue->userid ==> $instance->courseid (user without role)");
+            try {
+                if (!isset($instances[$ue->enrolid])) {
+                    $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+                }
+                $instance = $instances[$ue->enrolid];
+                $metagroup->unenrol_user($instance, $ue->userid);
+                if ($verbose) {
+                    mtrace("  unenrolling: $ue->userid ==> $instance->courseid (user without role)");
+                }
+            } catch (Exception $e) {
+                $error_count++;
+                if ($verbose) {
+                    mtrace("  ERROR processing cleanup unenrol: " . $e->getMessage());
+                    mtrace("    Details: userid=$ue->userid, enrolid=$ue->enrolid, courseid=" . (isset($instance) ? $instance->courseid : 'unknown'));
+                }
+                error_log("enrol_metagroup cleanup_users_without_roles (unenrol) error: " . $e->getMessage() . 
+                          " (userid=$ue->userid, enrolid=$ue->enrolid)");
+                continue;
             }
         }
         $ues->close();
@@ -1000,16 +1103,31 @@ function enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, &$inst
                      WHERE ra.id IS NULL AND ue.status = :active";
         $ues = $DB->get_recordset_sql($sql, $params);
         foreach($ues as $ue) {
-            if (!isset($instances[$ue->enrolid])) {
-                $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
-            }
-            $instance = $instances[$ue->enrolid];
-            $metagroup->update_user_enrol($instance, $ue->userid, ENROL_USER_SUSPENDED);
-            if ($verbose) {
-                mtrace("  suspending: $ue->userid ==> $instance->courseid (user without role)");
+            try {
+                if (!isset($instances[$ue->enrolid])) {
+                    $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+                }
+                $instance = $instances[$ue->enrolid];
+                $metagroup->update_user_enrol($instance, $ue->userid, ENROL_USER_SUSPENDED);
+                if ($verbose) {
+                    mtrace("  suspending: $ue->userid ==> $instance->courseid (user without role)");
+                }
+            } catch (Exception $e) {
+                $error_count++;
+                if ($verbose) {
+                    mtrace("  ERROR processing cleanup suspend: " . $e->getMessage());
+                    mtrace("    Details: userid=$ue->userid, enrolid=$ue->enrolid, courseid=" . (isset($instance) ? $instance->courseid : 'unknown'));
+                }
+                error_log("enrol_metagroup cleanup_users_without_roles (suspend) error: " . $e->getMessage() . 
+                          " (userid=$ue->userid, enrolid=$ue->enrolid)");
+                continue;
             }
         }
         $ues->close();
+    }
+    
+    if ($verbose && $error_count > 0) {
+        mtrace("Cleanup users processing errors: $error_count");
     }
 }
 
