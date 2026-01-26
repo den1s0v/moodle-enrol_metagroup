@@ -303,8 +303,21 @@ class enrol_metagroup_handler {
     public static function delete_empty_group_as_configured($groupid, $verbose = false) {
         global $DB;
 
+        // Проверяем, что группа существует
+        if (!$groupid || $groupid <= 0) {
+            return;
+        }
+        
+        // Проверяем существование группы в БД
+        if (!$DB->record_exists('groups', ['id' => $groupid])) {
+            if ($verbose) {
+                mtrace("  skipping empty group deletion: group $groupid does not exist");
+            }
+            return;
+        }
+
         // Удаляем пустую группу, если включена соответствующая настройка, и целевая группа присутствует.
-        if ($groupid && get_config('enrol_metagroup', 'deleteemptygroups')) {
+        if (get_config('enrol_metagroup', 'deleteemptygroups')) {
             $groupmembers = $DB->count_records('groups_members', array('groupid' => $groupid));
             if ($groupmembers == 0) {
                 groups_delete_group($groupid);
@@ -625,6 +638,9 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
 function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_having_link_lost, &$instances, $metagroup, $unenrolaction) {
     global $CFG, $DB;
 
+    // Cache for group existence checks to avoid duplicate DB queries
+    $group_exists_cache = [];
+
     // Отчисление / удаление из группы по мере необходимости - игнорируем флаг enabled, мы хотим избавиться от существующих зачислений в любом случае.
     // Добавлено: ограничение `ue`s до членов исходной группы (и членство в группе должно быть создано соответствующим экземпляром зачисления).
     // Возвращаемая запись должна иметь: parent_enrolid == NULL (означает необходимость отчисления) и/или old_groupid != NULL (означает необходимость удаления из этой группы).
@@ -670,12 +686,27 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
                 mtrace("  added user to group: $ue->userid ==> $instance->customint2 in course $instance->courseid (success: $ok).");
             }
 
-            $ok = groups_remove_member($ue->old_groupid, $ue->userid);
-            if ($verbose) {
-                mtrace("  removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
+            // Проверяем существование старой группы с использованием кэша
+            $cache_key = $ue->old_groupid;
+            if (!isset($group_exists_cache[$cache_key])) {
+                $group_exists_cache[$cache_key] = ($ue->old_groupid > 0 && 
+                    $DB->record_exists('groups', ['id' => $ue->old_groupid, 'courseid' => $instance->courseid]));
             }
-
-            enrol_metagroup_handler::delete_empty_group_as_configured($ue->old_groupid, $verbose);
+            
+            if ($group_exists_cache[$cache_key]) {
+                $ok = groups_remove_member($ue->old_groupid, $ue->userid);
+                if ($verbose) {
+                    mtrace("  removed user from group: $ue->userid ==> $ue->old_groupid in course $instance->courseid (success: $ok).");
+                }
+                
+                // Проверяем существование группы перед вызовом delete_empty_group_as_configured
+                // (функция сама может проверять, но лучше убедиться)
+                enrol_metagroup_handler::delete_empty_group_as_configured($ue->old_groupid, $verbose);
+            } else {
+                if ($verbose) {
+                    mtrace("  skipping group removal: group $ue->old_groupid does not exist for user $ue->userid in course $instance->courseid");
+                }
+            }
         }
 
         if (!$ue->parent_enrolid) {
