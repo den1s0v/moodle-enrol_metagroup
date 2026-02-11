@@ -96,7 +96,7 @@ class enrol_metagroup_handler {
 
         $context = context_course::instance($instance->courseid);
 
-        // List of enrolments in parent course (we ignore metagroup enrols in parents completely).
+        // List of enrolments in parent course (any enabled method including metagroup, e.g. when source is a summary course).
         // Added: restrict `ue`s to members source group.
         // Используем корневой курс и группу для синхронизации, если они указаны.
         $root_courseid = !empty($instance->customint4) ? $instance->customint4 : $instance->customint1;
@@ -110,9 +110,9 @@ class enrol_metagroup_handler {
         $params['groupid'] = $root_groupid;
         $sql = "SELECT ue.*, e.status AS enrolstatus
                   FROM {user_enrolments} ue
-                  JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol <> 'metagroup' AND e.courseid = :parentcourse AND e.enrol $enabled)
-                  JOIN {groups_members} gm ON (gm.userid = ue.userid)
-                 WHERE ue.userid = :userid AND gm.groupid = :groupid";
+                  JOIN {enrol} e ON (e.id = ue.enrolid AND e.courseid = :parentcourse AND e.enrol $enabled)
+                  JOIN {groups_members} gm ON (gm.userid = ue.userid AND gm.groupid = :groupid)
+                 WHERE ue.userid = :userid";
         $parentues = $DB->get_records_sql($sql, $params);
         
         // Проверяем также вручную добавленных студентов в логической группе (если она отличается от корневой).
@@ -124,7 +124,7 @@ class enrol_metagroup_handler {
             $manual_members = $DB->get_records_sql(
                 "SELECT DISTINCT ue.*, e.status AS enrolstatus
                   FROM {user_enrolments} ue
-                  JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol <> 'metagroup' AND e.courseid = :logicalcourse AND e.enrol $enabled)
+                  JOIN {enrol} e ON (e.id = ue.enrolid AND e.courseid = :logicalcourse AND e.enrol $enabled)
                   JOIN {groups_members} gm ON (gm.userid = ue.userid AND gm.groupid = :logicalgroup AND (gm.itemid = 0 OR gm.component = ''))
                  WHERE ue.userid = :userid",
                 $manual_params
@@ -539,7 +539,7 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
                         (CASE WHEN pue.timeend = 0 THEN 9999999999 ELSE pue.timeend END)
                         ELSE 0 END) AS timeend
               FROM {user_enrolments} pue
-              JOIN {enrol} pe ON (pe.id = pue.enrolid AND pe.enrol <> 'metagroup' AND pe.enrol $enabled)
+              JOIN {enrol} pe ON (pe.id = pue.enrolid AND pe.enrol $enabled)
               JOIN {groups_members} pgm ON (pgm.userid = pue.userid)
               JOIN {enrol} e ON (COALESCE(e.customint4, e.customint1) = pe.courseid AND COALESCE(e.customint5, e.customint3) = pgm.groupid AND e.enrol = 'metagroup' AND e.status = :enrolstatus $onecourse)
               JOIN {user} u ON (u.id = pue.userid AND u.deleted = 0)
@@ -681,7 +681,7 @@ function enrol_metagroup_sync_extra_enrolments($courseid, $verbose, $enrols_havi
               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
          LEFT JOIN {groups_members} gm ON (gm.userid = ue.userid AND gm.itemid = e.id)
          LEFT JOIN ({user_enrolments} xpue
-                      JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol <> 'metagroup' AND xpe.enrol $enabled)
+                      JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol $enabled)
                       JOIN {groups_members} xpgm ON (xpgm.userid = xpue.userid)
                    ) ON (xpe.courseid = COALESCE(e.customint4, e.customint1) AND xpue.userid = ue.userid AND xpgm.groupid = COALESCE(e.customint5, e.customint3))
              WHERE xpue.userid IS NULL OR (gm.id IS NOT NULL AND e.customint2 <> gm.groupid)";
@@ -828,8 +828,7 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
               FROM {user_enrolments} ue
               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'metagroup' $onecourse)
               JOIN {user_enrolments} xpue ON (xpue.userid = ue.userid)
-              JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol <> 'metagroup'
-                   AND xpe.enrol $enabled AND xpe.courseid = COALESCE(e.customint4, e.customint1))
+              JOIN {enrol} xpe ON (xpe.id = xpue.enrolid AND xpe.enrol $enabled AND xpe.courseid = COALESCE(e.customint4, e.customint1))
               JOIN {groups_members} pgm ON (pgm.userid = ue.userid AND COALESCE(e.customint5, e.customint3) = pgm.groupid)
           GROUP BY ue.userid, ue.enrolid
             HAVING (MIN(xpue.status + xpe.status) = 0 AND MIN(ue.status) > 0)
