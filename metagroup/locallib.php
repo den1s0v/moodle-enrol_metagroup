@@ -332,6 +332,86 @@ class enrol_metagroup_handler {
 }
 
 /**
+ * Clean up empty orphaned groups in given courses.
+ *
+ * Deletes only groups that are empty (0 members) AND not referenced by any
+ * enrol_metagroup instance (customint2). Groups still used as targets are kept.
+ *
+ * @param array $courseids Course IDs to process (empty = all courses with metagroup)
+ * @param bool $verbose Unused, kept for API compatibility
+ * @param bool $dryrun If true, do not delete, only return what would be deleted
+ * @return array ['deleted' => [...], 'skipped' => [...], 'total_deleted' => N]
+ */
+function enrol_metagroup_cleanup_empty_groups(array $courseids, $verbose = false, $dryrun = false) {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/group/lib.php');
+
+    $result = [
+        'deleted' => [],
+        'skipped' => [],
+        'total_deleted' => 0,
+    ];
+
+    if (empty($courseids)) {
+        $courseids = $DB->get_fieldset_sql(
+            "SELECT DISTINCT courseid FROM {enrol} WHERE enrol = 'metagroup' AND courseid > 0"
+        );
+    }
+    $courseids = array_filter(array_map('intval', $courseids));
+    if (empty($courseids)) {
+        return $result;
+    }
+
+    list($insql, $params) = $DB->get_in_or_equal($courseids, SQL_PARAMS_NAMED, 'cid');
+    $params['enrol'] = 'metagroup';
+
+    $emptygroups = $DB->get_records_sql(
+        "SELECT g.id, g.courseid, g.name
+           FROM {groups} g
+           LEFT JOIN {groups_members} gm ON gm.groupid = g.id
+          WHERE g.courseid $insql
+          GROUP BY g.id, g.courseid, g.name
+         HAVING COUNT(gm.id) = 0",
+        $params
+    );
+
+    $protected = $DB->get_fieldset_sql(
+        "SELECT DISTINCT customint2
+           FROM {enrol}
+          WHERE enrol = :enrol
+            AND courseid $insql
+            AND customint2 > 0",
+        $params
+    );
+    $protected = array_flip($protected);
+
+    foreach ($emptygroups as $group) {
+        if (isset($protected[$group->id])) {
+            $result['skipped'][] = $group;
+            continue;
+        }
+        if ($dryrun) {
+            $result['deleted'][] = $group;
+        } else {
+            try {
+                groups_delete_group($group->id);
+                $result['deleted'][] = $group;
+                $result['total_deleted']++;
+            } catch (Exception $e) {
+                $result['skipped'][] = (object)array_merge((array)$group, ['error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    if ($dryrun) {
+        $result['total_deleted'] = count($result['deleted']);
+    }
+
+    return $result;
+}
+
+/**
  * Находит корневой курс через цепочку метагрупповых связей.
  *
  * Рекурсивно проходит по цепочке метагрупповых связей, чтобы найти корневой курс.

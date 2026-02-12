@@ -23,6 +23,19 @@
  */
 
 $string['addgroup'] = 'Add to group';
+$string['cleanup_empty_groups'] = 'Clean empty groups';
+$string['cleanup_empty_groups_courseids'] = 'Course IDs';
+$string['cleanup_empty_groups_courseids_help'] = 'Comma-separated course IDs. Leave empty to process all courses that have metagroup instances.';
+$string['cleanup_empty_groups_deleted'] = 'Deleted';
+$string['cleanup_empty_groups_description'] = 'Remove empty groups that are no longer used as targets by any metagroup enrolment. Groups still referenced as customint2 are not deleted.';
+$string['cleanup_empty_groups_dryrun'] = 'Preview only (no deletion)';
+$string['cleanup_empty_groups_none'] = 'No empty orphaned groups found.';
+$string['cleanup_empty_groups_preview_result'] = 'Preview: groups that would be deleted';
+$string['cleanup_empty_groups_result'] = 'Cleanup result';
+$string['cleanup_empty_groups_run'] = 'Run cleanup';
+$string['cleanup_empty_groups_skipped'] = 'Skipped (still in use)';
+$string['cleanup_empty_groups_total'] = 'Total deleted: {$a}';
+$string['cleanup_empty_groups_would_delete'] = 'Would delete';
 $string['coursesort'] = 'Sort course list';
 $string['coursesort_help'] = 'This determines whether the list of courses that can be linked are sorted by sort order (i.e. the order set in Site administration > Courses > Manage courses and categories) or alphabetically by course setting.';
 $string['changecourseselection'] = '← Select another course';

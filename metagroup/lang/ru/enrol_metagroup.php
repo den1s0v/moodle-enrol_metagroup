@@ -23,6 +23,19 @@
  */
 
 $string['addgroup'] = 'Добавить в группу';
+$string['cleanup_empty_groups'] = 'Очистка пустых групп';
+$string['cleanup_empty_groups_courseids'] = 'ID курсов';
+$string['cleanup_empty_groups_courseids_help'] = 'ID курсов через запятую. Оставьте пустым для обработки всех курсов с метагрупповыми связями.';
+$string['cleanup_empty_groups_deleted'] = 'Удалено';
+$string['cleanup_empty_groups_description'] = 'Удаление опустевших групп, которые больше не используются как целевые для метагрупповых зачислений. Группы, на которые всё ещё ссылается customint2, не удаляются.';
+$string['cleanup_empty_groups_dryrun'] = 'Только предпросмотр (без удаления)';
+$string['cleanup_empty_groups_none'] = 'Пустых сиротских групп не найдено.';
+$string['cleanup_empty_groups_preview_result'] = 'Предпросмотр: группы, которые будут удалены';
+$string['cleanup_empty_groups_result'] = 'Результат очистки';
+$string['cleanup_empty_groups_run'] = 'Запустить очистку';
+$string['cleanup_empty_groups_skipped'] = 'Пропущено (ещё используется)';
+$string['cleanup_empty_groups_total'] = 'Всего удалено: {$a}';
+$string['cleanup_empty_groups_would_delete'] = 'Будет удалено';
 $string['coursesort'] = 'Сортировка списка курсов';
 $string['coursesort_help'] = 'Это определяет, будет ли список курсов, которые можно связать, отсортирован по порядку сортировки (т.е. по порядку, установленному в Администрирование сайта > Курсы > Управление курсами и категориями) или в алфавитном порядке по настройкам курса.';
 $string['changecourseselection'] = '← Выбрать другой курс';

@@ -78,6 +78,10 @@ if ($ADMIN->fulltree) {
         $settings->add($setting = new admin_setting_configcheckbox('enrol_metagroup/limittoenrolled',
         get_string('limittoenrolled', 'enrol_metagroup'), get_string('limittoenrolled_help', 'enrol_metagroup'), 0));
 
+        $url = new moodle_url('/enrol/metagroup/cleanup_empty_groups.php');
+        $settings->add(new admin_setting_description('enrol_metagroup_cleanup_link',
+            get_string('cleanup_empty_groups', 'enrol_metagroup'),
+            html_writer::link($url, get_string('cleanup_empty_groups_run', 'enrol_metagroup'))));
 
     }
 }
