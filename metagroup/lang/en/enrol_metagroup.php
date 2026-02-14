@@ -73,4 +73,7 @@ $string['syncall_desc'] = 'If enabled all group members are synchronised even if
 $string['syncmode'] = 'Sync kind';
 $string['syncmode_updatable'] = 'Updatable group (mirroring)';
 $string['syncmode_snapshot'] = 'Non-updatable group (snapshot)';
+$string['sourcecourseschain'] = 'Source courses chain';
+$string['recalculate_links'] = 'Recalculate links';
+$string['recursive_link_error'] = 'Cannot create link: the target course is in the source chain (recursive link).';
 $string['privacy:metadata:core_group'] = 'Enrol metagroup plugin can create a new group or use an existing group to add all the participants of the other course\'s group linked.';

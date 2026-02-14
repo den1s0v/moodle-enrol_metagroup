@@ -203,6 +203,7 @@ Array of link objects, each containing:
 - `source_group_name` => string - Cached source group name (customchar2)
 - `root_course_name` => string|null - Root course name (customchar1, if exists)
 - `root_group_name` => string|null - Root group name (customchar3, if exists)
+- `source_courses` => array - IDs of all source courses (from customtext1 JSON)
 
 **Example:**
 ```php
@@ -371,6 +372,7 @@ function enrol_metagroup_get_all_links(
 - `source_group_name` => string - Кэшированное имя группы-источника
 - `root_course_name` => string|null - Имя корневого курса (если существует)
 - `root_group_name` => string|null - Имя корневой группы (если существует)
+- `source_courses` => array - ID всех курсов-источников (из customtext1 JSON)
 
 
 ## TRANSITIVE (CHAIN) LINKS
@@ -456,6 +458,83 @@ When a intermediate metagroup link is deleted (e.g., A → B), dependent links (
 - **KEEP**: Связи остаются, но могут работать некорректно
 - **SUSPENDNOROLES**: Студенты блокируются, роли отзываются
 - **UNENROL**: Студенты отчисляются из курса
+
+
+## SOURCE COURSES (customtext1)
+
+Starting from a recent version, the plugin stores an extended list of source courses in `enrol.customtext1` as JSON. This list is used for recursive link validation and for displaying the full chain of courses on the edit form.
+
+### Purpose
+
+The field `customtext1` contains JSON:
+
+```json
+{"source_courses": [2, 5, 7, 12]}
+```
+
+The array lists all course IDs that supply students to the linked group, in order: root courses (deepest) first, intermediate courses, then the logical source course last. Unique IDs only.
+
+### Computation algorithm
+
+The list is derived from the enrolment methods of all members of the source group:
+
+- **metagroup**: Use `customint4`/`customint1` of the parent link first; fallback to full recursive traversal via `enrol_metagroup_find_root_course`
+- **meta**: 2 levels (current course + parent course from `customint1`)
+- **other methods**: 1 level (current course only)
+
+### When it is recalculated
+
+- On instance creation
+- When the source course or group is changed in the edit form
+- Via the "Recalculate links" button on the edit form
+- During sync for instances with empty `customtext1` (up to 50 per run)
+
+### Recursive link validation
+
+A link may not be created if the target course appears in the source courses of the chosen source. This avoids recursive links (e.g. from a child course back to a parent). Validation is performed in PHP only, without JSON functions in SQL, for compatibility with different databases.
+
+### Edit form display
+
+On the enrolment instance edit form, an informational block shows the full chain of courses and groups with active links, indicating how the target group was assembled from all source paths.
+
+(На русском:)
+
+## SOURCE COURSES (customtext1)
+
+Начиная с одной из последних версий, плагин сохраняет расширенный список курсов-источников в `enrol.customtext1` в формате JSON. Список используется для проверки рекурсивных связей и для отображения полной цепочки курсов на форме редактирования.
+
+### Назначение
+
+Поле `customtext1` содержит JSON:
+
+```json
+{"source_courses": [2, 5, 7, 12]}
+```
+
+Массив перечисляет ID всех курсов, поставляющих студентов в связанную группу, в порядке: сначала корневые курсы (максимальная глубина), затем промежуточные, в конце — логический курс-источник. Только уникальные ID.
+
+### Алгоритм вычисления
+
+Список строится на основе способов зачисления участников группы-источника:
+
+- **metagroup**: сначала используются `customint4`/`customint1` родительской связи; при отсутствии — полный рекурсивный обход через `enrol_metagroup_find_root_course`
+- **meta**: 2 уровня (текущий курс + родительский курс из `customint1`)
+- **остальные способы**: 1 уровень (только текущий курс)
+
+### Когда пересчитывается
+
+- При создании экземпляра
+- При изменении курса-источника или группы в форме редактирования
+- По кнопке «Пересчитать связи» на форме редактирования
+- При sync для экземпляров с пустым `customtext1` (до 50 за запуск)
+
+### Проверка рекурсивных связей
+
+Связь не может быть создана, если целевой курс входит в список курсов-источников выбранного источника. Это предотвращает рекурсивные связи (например, из дочернего курса обратно в родительский). Проверка выполняется только в PHP, без JSON-функций в SQL, для совместимости с разными СУБД.
+
+### Отображение на форме редактирования
+
+На форме редактирования экземпляра способа зачисления выводится информационный блок с полной цепочкой курсов и групп с активными ссылками, показывающий, как целевая группа была собрана из всех путей-источников.
 
 
 ## THANKS

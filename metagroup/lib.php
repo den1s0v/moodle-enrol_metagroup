@@ -253,6 +253,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
                     $data['customchar3'] = $root['root_groupname'];
                     
                     $result = parent::add_instance($course, $data);
+                    if ($result) {
+                        $source_courses = enrol_metagroup_compute_source_courses($logical_courseid, $source_groupid);
+                        $DB->set_field('enrol', 'customtext1', json_encode(['source_courses' => $source_courses]), ['id' => $result]);
+                    }
                 }
             } else {
                 // Обычная группа - находим корневой курс.
@@ -286,6 +290,10 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
                 // Add enrolling method to the course: one for each linked group.
                 $result = parent::add_instance($course, $data);
+                if ($result) {
+                    $source_courses = enrol_metagroup_compute_source_courses($logical_courseid, $source_groupid);
+                    $DB->set_field('enrol', 'customtext1', json_encode(['source_courses' => $source_courses]), ['id' => $result]);
+                }
             }
         }
 
@@ -301,7 +309,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @return boolean
      */
     public function update_instance($instance, $data) {
-        global $CFG;
+        global $CFG, $DB;
 
         require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
 
@@ -376,6 +384,16 @@ class enrol_metagroup_plugin extends enrol_plugin {
                 $data->customchar1 = $root['root_coursename'];
                 $data->customchar3 = $root['root_groupname'];
             }
+        }
+
+        // Пересчёт customtext1 при изменении источника (кнопка «Пересчитать связи» — отдельная страница).
+        $source_changed = (isset($data->customint1) && $data->customint1 != $instance->customint1) ||
+            (isset($data->customint3) && $data->customint3 != $instance->customint3);
+        if ($source_changed) {
+            $src_courseid = isset($data->customint1) ? $data->customint1 : $instance->customint1;
+            $src_groupid = isset($data->customint3) ? $data->customint3 : $instance->customint3;
+            $source_courses = enrol_metagroup_compute_source_courses($src_courseid, $src_groupid);
+            $DB->set_field('enrol', 'customtext1', json_encode(['source_courses' => $source_courses]), ['id' => $instance->id]);
         }
 
         $result = parent::update_instance($instance, $data);
@@ -570,7 +588,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
      * @return bool
      */
     public function edit_instance_form($instance, MoodleQuickForm $mform, $coursecontext) {
-        global $DB;
+        global $DB, $CFG;
 
         $creation_mode = empty($instance->id);
         $edit_mode = !$creation_mode;
@@ -667,6 +685,32 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
             $mform->addElement('select', 'customint2', get_string('addgroup', 'enrol_metagroup'), $groups);
 
+            if ($edit_mode && !empty($instance->customint3)) {
+                require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
+                $paths = enrol_metagroup_get_chain_for_display($instance);
+                $chain_html = '';
+                if (!empty($paths)) {
+                    $chain_html .= html_writer::tag('h4', get_string('sourcecourseschain', 'enrol_metagroup'));
+                    foreach ($paths as $path) {
+                        $parts = [];
+                        foreach ($path as $step) {
+                            $link = html_writer::link($step['courseurl'], s($step['coursename']));
+                            $groupinfo = $step['groupname'] !== null ? ' — ' . s($step['groupname']) : '';
+                            $parts[] = $link . $groupinfo;
+                        }
+                        $chain_html .= html_writer::tag('div', implode(' → ', $parts), ['class' => 'mb-2']);
+                    }
+                    $chain_html .= html_writer::empty_tag('br');
+                    $mform->addElement('static', 'sourcechain', '', $chain_html);
+                }
+                $recalc_url = new moodle_url('/enrol/metagroup/recalculate.php', [
+                    'id' => $instance->id,
+                    'courseid' => $coursecontext->instanceid,
+                    'sesskey' => sesskey(),
+                ]);
+                $recalc_link = html_writer::link($recalc_url, get_string('recalculate_links', 'enrol_metagroup'), ['class' => 'btn btn-secondary']);
+                $mform->addElement('static', 'recalculate_links', '', $recalc_link);
+            }
 
         } else {
             // Do not show group options until course is selected,
@@ -692,7 +736,9 @@ class enrol_metagroup_plugin extends enrol_plugin {
      *         or an empty array if everything is OK.
      */
     public function edit_instance_validation($data, $files, $instance, $context) {
-        global $DB;
+        global $DB, $CFG;
+
+        require_once("$CFG->dirroot/enrol/metagroup/locallib.php");
 
         $errors = array();
 
@@ -735,8 +781,19 @@ class enrol_metagroup_plugin extends enrol_plugin {
                         $errors['customint1'] = get_string('invalidcourseid', 'error');
                     } else if ($coursesrecord->id == $thiscourseid) {
                         // Запрещаем только непосредственный цикл (курс на сам себя).
-                        // Разрешаем создание связи из дочернего курса (будет найден корневой курс).
                         $errors['customint1'] = get_string('invalidcourseid', 'error');
+                    } else {
+                        // Расширенная проверка: target не должен входить в source_courses.
+                        $source_groupid = isset($data['customint3']) ? $data['customint3'] : 0;
+                        if (is_array($source_groupid)) {
+                            $source_groupid = reset($source_groupid) ?: 0;
+                        }
+                        if ($source_groupid) {
+                            $source_courses = enrol_metagroup_compute_source_courses($coursesrecord->id, $source_groupid);
+                            if (in_array((int)$thiscourseid, array_map('intval', $source_courses))) {
+                                $errors['customint1'] = get_string('recursive_link_error', 'enrol_metagroup');
+                            }
+                        }
                     }
                 }
             } else {

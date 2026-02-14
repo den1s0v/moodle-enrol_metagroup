@@ -522,6 +522,222 @@ function enrol_metagroup_detect_aggregated_group($courseid, $groupid) {
 }
 
 /**
+ * Вычисляет перечень курсов-источников для группы на основе способов зачисления участников.
+ *
+ * Учитывает metagroup (полная глубина, сначала customint4/customint1), meta (2 уровня), остальные (1 уровень).
+ * Порядок: корневые курсы → промежуточные → source_courseid последним.
+ *
+ * @param int $source_courseid ID курса-источника (логический)
+ * @param int $source_groupid ID группы-источника
+ * @param array $visited защита от циклов (внутренний параметр)
+ * @return array массив courseid в порядке: корни → промежуточные → source_courseid
+ */
+function enrol_metagroup_compute_source_courses($source_courseid, $source_groupid, $visited = []) {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/group/lib.php');
+
+    if (in_array($source_courseid, $visited)) {
+        return [];
+    }
+    $visited[] = $source_courseid;
+
+    if (!$source_groupid) {
+        return [$source_courseid];
+    }
+
+    $members = groups_get_members($source_groupid);
+    if (empty($members)) {
+        return [$source_courseid];
+    }
+
+    $collected = [];
+
+    list($enabled, $enabled_params) = $DB->get_in_or_equal(
+        explode(',', $CFG->enrol_plugins_enabled),
+        SQL_PARAMS_NAMED,
+        'ep'
+    );
+
+    foreach ($members as $member) {
+        $userid = $member->id;
+        $params = ['courseid' => $source_courseid, 'userid' => $userid, 'groupid' => $source_groupid] + $enabled_params;
+        $sql = "SELECT e.*
+                  FROM {user_enrolments} ue
+                  JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
+                  JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid
+                 WHERE ue.userid = :userid";
+        $user_enrols = $DB->get_records_sql($sql, $params);
+
+        foreach ($user_enrols as $enrol) {
+            if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+                $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
+                $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
+                if ($parent_courseid && $parent_courseid != $source_courseid) {
+                    $parent_courses = enrol_metagroup_compute_source_courses(
+                        $parent_courseid,
+                        $parent_groupid ?: 0,
+                        $visited
+                    );
+                    $parent_courses = array_diff($parent_courses, [$source_courseid]);
+                    $collected = array_values(array_unique(array_merge($parent_courses, $collected)));
+                    $root = enrol_metagroup_find_root_course($parent_courseid, $parent_groupid);
+                    if ($root && !empty($root['root_courseid']) && !in_array($root['root_courseid'], $collected)) {
+                        array_unshift($collected, $root['root_courseid']);
+                    }
+                }
+            } else if ($enrol->enrol === 'meta') {
+                $parent_courseid = !empty($enrol->customint1) ? $enrol->customint1 : null;
+                if ($parent_courseid && !in_array($parent_courseid, $collected)) {
+                    array_unshift($collected, $parent_courseid);
+                }
+            }
+        }
+    }
+
+    if (!in_array($source_courseid, $collected)) {
+        $collected[] = $source_courseid;
+    }
+    return array_values(array_unique($collected));
+}
+
+/**
+ * Строит все пути, как и откуда текущая целевая группа была собрана.
+ *
+ * Только участники целевой группы (customint2). Трассирует все пути от корневых курсов до группы-источника.
+ *
+ * @param stdClass $instance enrol record с customint1, customint2, customint3, courseid
+ * @return array массив путей. Каждый путь — массив шагов [{courseid, groupid, groupname, courseurl}, ...]
+ *               от корня к группе-источнику, плюс целевой курс/группа в конце
+ */
+function enrol_metagroup_get_chain_for_display($instance) {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/group/lib.php');
+
+    $target_courseid = $instance->courseid;
+    $target_groupid = $instance->customint2;
+    $source_courseid = $instance->customint1;
+    $source_groupid = $instance->customint3;
+
+    if (!$source_groupid) {
+        return [];
+    }
+
+    $members = groups_get_members($source_groupid);
+    if (empty($members)) {
+        $step = enrol_metagroup_chain_step($source_courseid, $source_groupid);
+        $targetstep = enrol_metagroup_chain_step($target_courseid, $target_groupid);
+        return [[$step, $targetstep]];
+    }
+
+    list($enabled, $enabled_params) = $DB->get_in_or_equal(
+        explode(',', $CFG->enrol_plugins_enabled),
+        SQL_PARAMS_NAMED,
+        'ep'
+    );
+
+    $paths = [];
+    $path_keys = [];
+
+    foreach ($members as $member) {
+        $params = ['courseid' => $source_courseid, 'userid' => $member->id, 'groupid' => $source_groupid] + $enabled_params;
+        $sql = "SELECT e.*
+                  FROM {user_enrolments} ue
+                  JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
+                  JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid
+                 WHERE ue.userid = :userid";
+        $user_enrols = $DB->get_records_sql($sql, $params);
+
+        foreach ($user_enrols as $enrol) {
+            $chain = [];
+            if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+                $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
+                $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
+                if ($parent_courseid && $parent_courseid != $source_courseid) {
+                    $chain = enrol_metagroup_build_path_recursive($parent_courseid, $parent_groupid, []);
+                }
+            } else if ($enrol->enrol === 'meta' && !empty($enrol->customint1)) {
+                $chain = [enrol_metagroup_chain_step($enrol->customint1, 0)];
+            }
+            $chain[] = enrol_metagroup_chain_step($source_courseid, $source_groupid);
+            $chain[] = enrol_metagroup_chain_step($target_courseid, $target_groupid);
+
+            $key = implode(',', array_map(function($s) { return $s['courseid'].':'.$s['groupid']; }, $chain));
+            if (!isset($path_keys[$key])) {
+                $path_keys[$key] = true;
+                $paths[] = $chain;
+            }
+        }
+    }
+
+    if (empty($paths)) {
+        $step = enrol_metagroup_chain_step($source_courseid, $source_groupid);
+        $targetstep = enrol_metagroup_chain_step($target_courseid, $target_groupid);
+        return [[$step, $targetstep]];
+    }
+
+    return $paths;
+}
+
+/**
+ * Рекурсивно строит путь от (courseid, groupid) к корню.
+ * @internal
+ */
+function enrol_metagroup_build_path_recursive($courseid, $groupid, $visited) {
+    global $DB, $CFG;
+
+    if (in_array($courseid, $visited)) {
+        return [];
+    }
+    $visited[] = $courseid;
+
+    $conditions = ['courseid' => $courseid, 'enrol' => 'metagroup', 'status' => ENROL_INSTANCE_ENABLED];
+    if ($groupid > 0) {
+        $conditions['customint2'] = $groupid;
+    }
+    $parent_enrols = $DB->get_records('enrol', $conditions);
+
+    if (empty($parent_enrols)) {
+        return [enrol_metagroup_chain_step($courseid, $groupid)];
+    }
+
+    $parent = reset($parent_enrols);
+    $parent_courseid = !empty($parent->customint4) ? $parent->customint4 : $parent->customint1;
+    $parent_groupid = !empty($parent->customint5) ? $parent->customint5 : $parent->customint3;
+
+    $prev = enrol_metagroup_build_path_recursive($parent_courseid, $parent_groupid, $visited);
+    $prev[] = enrol_metagroup_chain_step($courseid, $groupid);
+    return $prev;
+}
+
+/**
+ * Формирует шаг цепочки для отображения.
+ * @internal
+ */
+function enrol_metagroup_chain_step($courseid, $groupid) {
+    global $DB;
+
+    $courseurl = new moodle_url('/course/view.php', ['id' => $courseid]);
+    $course = $DB->get_record('course', ['id' => $courseid], 'id,shortname,fullname');
+    $coursename = $course ? format_string(get_course_display_name_for_list($course)) : (string)$courseid;
+
+    $groupname = null;
+    if ($groupid) {
+        $group = $DB->get_record('groups', ['id' => $groupid], 'id,name');
+        $groupname = $group ? $group->name : null;
+    }
+
+    return [
+        'courseid' => $courseid,
+        'groupid' => $groupid,
+        'groupname' => $groupname,
+        'coursename' => $coursename,
+        'courseurl' => $courseurl->out(false),
+    ];
+}
+
+/**
  * Обработка потерянных связей (когда родительский курс или группа удалены).
  *
  * @param int|null $courseid ID курса для обработки, null означает все курсы
@@ -1220,7 +1436,7 @@ function enrol_metagroup_cleanup_users_without_roles($courseid, $verbose, &$inst
  * @return int 0 means ok, 1 means error, 2 means plugin disabled
  */
 function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
-    global $CFG;
+    global $CFG, $DB;
     require_once("{$CFG->dirroot}/group/lib.php");
 
     // Удаляем все роли, если синхронизация метагруппы отключена, они могут быть воссозданы позже здесь в cron.
@@ -1242,6 +1458,33 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
 
     // Шаг 1: Обработка потерянных связей (когда родительский курс или группа удалены).
     $enrols_having_link_lost = enrol_metagroup_sync_lost_links($courseid, $verbose);
+
+    // Инициализация customtext1 (source_courses) для экземпляров с пустым полем (созданных до фичи).
+    $onecourse = $courseid ? "AND courseid = :courseid" : "";
+    $params = ['enrol' => 'metagroup'];
+    if ($courseid) {
+        $params['courseid'] = $courseid;
+    }
+    $empty_customtext = $DB->get_records_select(
+        'enrol',
+        "enrol = :enrol AND (customtext1 IS NULL OR customtext1 = '') $onecourse",
+        $params,
+        'id ASC',
+        'id,courseid,customint1,customint2,customint3',
+        0,
+        50
+    );
+    foreach ($empty_customtext as $rec) {
+        $source_courses = enrol_metagroup_compute_source_courses(
+            $rec->customint1,
+            $rec->customint3
+        );
+        $json = json_encode(['source_courses' => $source_courses]);
+        $DB->set_field('enrol', 'customtext1', $json, ['id' => $rec->id]);
+        if ($verbose) {
+            mtrace("  Initialized customtext1 for enrol instance {$rec->id}");
+        }
+    }
 
     // Инициализация кэшей и получение настроек плагина.
     $instances = array(); // Кэш экземпляров способов зачисления.
@@ -1522,6 +1765,9 @@ function enrol_metagroup_create_link($target_courseid, $source_courseid, $source
                 $update_data->customchar3 = $group_obj->name;
             }
         }
+
+        $source_courses = enrol_metagroup_compute_source_courses($source_courseid, $source_groupid);
+        $update_data->customtext1 = json_encode(['source_courses' => $source_courses]);
         
         $DB->update_record('enrol', $update_data);
         
@@ -1682,6 +1928,7 @@ function enrol_metagroup_delete_link($target_courseid, $source_courseid, $source
  *   - 'source_group_name' => string (customchar2 - cached source group name)
  *   - 'root_course_name' => string|null (customchar1 - root course name, if exists)
  *   - 'root_group_name' => string|null (customchar3 - root group name, if exists)
+ *   - 'source_courses' => array (decoded from customtext1 JSON, empty array if not set)
  */
 function enrol_metagroup_get_all_links($target_courseid = null, $source_courseid = null) {
     global $DB;
@@ -1716,6 +1963,13 @@ function enrol_metagroup_get_all_links($target_courseid = null, $source_courseid
         $link->source_group_name = $record->customchar2 ?? '';
         $link->root_course_name = !empty($record->customchar1) ? $record->customchar1 : null;
         $link->root_group_name = !empty($record->customchar3) ? $record->customchar3 : null;
+        $link->source_courses = [];
+        if (!empty($record->customtext1)) {
+            $decoded = json_decode($record->customtext1, true);
+            if (is_array($decoded) && isset($decoded['source_courses'])) {
+                $link->source_courses = $decoded['source_courses'];
+            }
+        }
         $links[] = $link;
     }
 
