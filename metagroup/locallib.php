@@ -559,38 +559,35 @@ function enrol_metagroup_compute_source_courses($source_courseid, $source_groupi
         'ep'
     );
 
-    foreach ($members as $member) {
-        $userid = $member->id;
-        $params = ['courseid' => $source_courseid, 'userid' => $userid, 'groupid' => $source_groupid] + $enabled_params;
-        $sql = "SELECT e.*
-                  FROM {user_enrolments} ue
-                  JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
-                  JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid
-                 WHERE ue.userid = :userid";
-        $user_enrols = $DB->get_records_sql($sql, $params);
+    // Один запрос: все уникальные способы зачисления, через которые участники группы попали в неё.
+    $params = ['courseid' => $source_courseid, 'groupid' => $source_groupid] + $enabled_params;
+    $sql = "SELECT DISTINCT e.*
+              FROM {user_enrolments} ue
+              JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
+              JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid";
+    $unique_enrols = $DB->get_records_sql($sql, $params);
 
-        foreach ($user_enrols as $enrol) {
-            if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
-                $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
-                $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
-                if ($parent_courseid && $parent_courseid != $source_courseid) {
-                    $parent_courses = enrol_metagroup_compute_source_courses(
-                        $parent_courseid,
-                        $parent_groupid ?: 0,
-                        $visited
-                    );
-                    $parent_courses = array_diff($parent_courses, [$source_courseid]);
-                    $collected = array_values(array_unique(array_merge($parent_courses, $collected)));
-                    $root = enrol_metagroup_find_root_course($parent_courseid, $parent_groupid);
-                    if ($root && !empty($root['root_courseid']) && !in_array($root['root_courseid'], $collected)) {
-                        array_unshift($collected, $root['root_courseid']);
-                    }
+    foreach ($unique_enrols as $enrol) {
+        if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+            $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
+            $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
+            if ($parent_courseid && $parent_courseid != $source_courseid) {
+                $parent_courses = enrol_metagroup_compute_source_courses(
+                    $parent_courseid,
+                    $parent_groupid ?: 0,
+                    $visited
+                );
+                $parent_courses = array_diff($parent_courses, [$source_courseid]);
+                $collected = array_values(array_unique(array_merge($parent_courses, $collected)));
+                $root = enrol_metagroup_find_root_course($parent_courseid, $parent_groupid);
+                if ($root && !empty($root['root_courseid']) && !in_array($root['root_courseid'], $collected)) {
+                    array_unshift($collected, $root['root_courseid']);
                 }
-            } else if ($enrol->enrol === 'meta') {
-                $parent_courseid = !empty($enrol->customint1) ? $enrol->customint1 : null;
-                if ($parent_courseid && !in_array($parent_courseid, $collected)) {
-                    array_unshift($collected, $parent_courseid);
-                }
+            }
+        } else if ($enrol->enrol === 'meta') {
+            $parent_courseid = !empty($enrol->customint1) ? $enrol->customint1 : null;
+            if ($parent_courseid && !in_array($parent_courseid, $collected)) {
+                array_unshift($collected, $parent_courseid);
             }
         }
     }
@@ -637,38 +634,29 @@ function enrol_metagroup_get_chain_for_display($instance) {
         'ep'
     );
 
+    // Один запрос: все уникальные способы зачисления, через которые участники попали в группу-источник.
+    $params = ['courseid' => $source_courseid, 'groupid' => $source_groupid] + $enabled_params;
+    $sql = "SELECT DISTINCT e.*
+              FROM {user_enrolments} ue
+              JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
+              JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid";
+    $unique_enrols = $DB->get_records_sql($sql, $params);
+
     $paths = [];
-    $path_keys = [];
-
-    foreach ($members as $member) {
-        $params = ['courseid' => $source_courseid, 'userid' => $member->id, 'groupid' => $source_groupid] + $enabled_params;
-        $sql = "SELECT e.*
-                  FROM {user_enrolments} ue
-                  JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.enrol $enabled
-                  JOIN {groups_members} gm ON gm.userid = ue.userid AND gm.groupid = :groupid
-                 WHERE ue.userid = :userid";
-        $user_enrols = $DB->get_records_sql($sql, $params);
-
-        foreach ($user_enrols as $enrol) {
-            $chain = [];
-            if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
-                $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
-                $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
-                if ($parent_courseid && $parent_courseid != $source_courseid) {
-                    $chain = enrol_metagroup_build_path_recursive($parent_courseid, $parent_groupid, []);
-                }
-            } else if ($enrol->enrol === 'meta' && !empty($enrol->customint1)) {
-                $chain = [enrol_metagroup_chain_step($enrol->customint1, 0)];
+    foreach ($unique_enrols as $enrol) {
+        $chain = [];
+        if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+            $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
+            $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
+            if ($parent_courseid && $parent_courseid != $source_courseid) {
+                $chain = enrol_metagroup_build_path_recursive($parent_courseid, $parent_groupid, []);
             }
-            $chain[] = enrol_metagroup_chain_step($source_courseid, $source_groupid);
-            $chain[] = enrol_metagroup_chain_step($target_courseid, $target_groupid);
-
-            $key = implode(',', array_map(function($s) { return $s['courseid'].':'.$s['groupid']; }, $chain));
-            if (!isset($path_keys[$key])) {
-                $path_keys[$key] = true;
-                $paths[] = $chain;
-            }
+        } else if ($enrol->enrol === 'meta' && !empty($enrol->customint1)) {
+            $chain = [enrol_metagroup_chain_step($enrol->customint1, 0)];
         }
+        $chain[] = enrol_metagroup_chain_step($source_courseid, $source_groupid);
+        $chain[] = enrol_metagroup_chain_step($target_courseid, $target_groupid);
+        $paths[] = $chain;
     }
 
     if (empty($paths)) {
