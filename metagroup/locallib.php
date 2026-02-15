@@ -156,12 +156,12 @@ class enrol_metagroup_handler {
         $skiproles = empty($skiproles) ? array() : explode(',', $skiproles);
         $syncall   = $plugin->get_config('syncall', 1);
 
-        // Roles in parent course (metagroup enrols must be ignored!)
+        // Roles in parent course (including enrol_metagroup for chain support).
         $parentroles = array();
         list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
         $params['contextid'] = $parentcontext->id;
         $params['userid'] = $userid;
-        $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
+        $select = "contextid = :contextid AND userid = :userid AND roleid $ignoreroles";
         foreach($DB->get_records_select('role_assignments', $select, $params) as $ra) {
             $parentroles[$ra->roleid] = $ra->roleid;
         }
@@ -858,7 +858,7 @@ function enrol_metagroup_sync_missing_enrolments($courseid, $verbose, $enrols_ha
                 list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
                 $params['contextid'] = $parentcontext->id;
                 $params['userid'] = $ue->userid;
-                $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
+                $select = "contextid = :contextid AND userid = :userid AND roleid $ignoreroles";
                 if (!$DB->record_exists_select('role_assignments', $select, $params)) {
                     // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
                     if ($verbose) {
@@ -1157,7 +1157,7 @@ function enrol_metagroup_sync_status_updates($courseid, $verbose, $enrols_having
             list($ignoreroles, $params) = $DB->get_in_or_equal($skiproles, SQL_PARAMS_NAMED, 'ri', false, -1);
             $params['contextid'] = $parentcontext->id;
             $params['userid'] = $ue->userid;
-            $select = "contextid = :contextid AND userid = :userid AND component <> 'enrol_metagroup' AND roleid $ignoreroles";
+            $select = "contextid = :contextid AND userid = :userid AND roleid $ignoreroles";
             if (!$DB->record_exists_select('role_assignments', $select, $params)) {
                 // Не повезло, у этого пользователя нет ни одной роли, которую мы хотим в родительском курсе.
                 if ($verbose) {
@@ -1206,12 +1206,10 @@ function enrol_metagroup_sync_roles_assign($courseid, $verbose, $metagroup, $all
 
     $enabled = explode(',', $CFG->enrol_plugins_enabled);
     foreach($enabled as $k=>$v) {
-        if ($v === 'metagroup') {
-            continue; // Нет синхронизации метагрупповых ролей метагруппой.
-        }
         $enabled[$k] = 'enrol_'.$v;
     }
     $enabled[] = ''; // Ручные назначения также реплицируются.
+    $enabled[] = 'enrol_metagroup'; // Chain support: copy roles from parent metagroup too.
 
     $onecourse = $courseid ? "AND e.courseid = :courseid" : "";
     list($enabled, $params) = $DB->get_in_or_equal($enabled, SQL_PARAMS_NAMED, 'e');
@@ -1291,7 +1289,7 @@ function enrol_metagroup_sync_roles_unassign($courseid, $verbose, $metagroup, $a
               FROM {role_assignments} ra
               JOIN {enrol} e ON (e.id = ra.itemid AND ra.component = 'enrol_metagroup' AND e.enrol = 'metagroup' $onecourse)
               JOIN {context} pc ON (pc.instanceid = COALESCE(e.customint4, e.customint1) AND pc.contextlevel = :coursecontext)
-         LEFT JOIN {role_assignments} pra ON (pra.contextid = pc.id AND pra.userid = ra.userid AND pra.roleid = ra.roleid AND pra.component <> 'enrol_metagroup' $notignored)
+         LEFT JOIN {role_assignments} pra ON (pra.contextid = pc.id AND pra.userid = ra.userid AND pra.roleid = ra.roleid $notignored)
          LEFT JOIN {user_enrolments} ue ON (ue.enrolid = e.id AND ue.userid = ra.userid AND ue.status = :activeuser)
              WHERE pra.id IS NULL OR ue.id IS NULL OR e.status <> :enabledinstance";
 

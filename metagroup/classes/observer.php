@@ -47,11 +47,6 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
             return true;
         }
 
-        if ($event->other['enrol'] === 'metagroup') {
-            // Prevent circular dependencies - we can not sync metagroup enrolments recursively.
-            return true;
-        }
-
         self::sync_course_instances($event->courseid, $event->relateduserid);
         return true;
     }
@@ -65,11 +60,6 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
     public static function user_enrolment_deleted(\core\event\user_enrolment_deleted $event) {
         if (!enrol_is_enabled('metagroup')) {
             // This is slow, let enrol_metagroup_sync() deal with disabled plugin.
-            return true;
-        }
-
-        if ($event->other['enrol'] === 'metagroup') {
-            // Prevent circular dependencies - we can not sync metagroup enrolments recursively.
             return true;
         }
 
@@ -90,11 +80,6 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
             return true;
         }
 
-        if ($event->other['enrol'] === 'metagroup') {
-            // Prevent circular dependencies - we can not sync metagroup enrolments recursively.
-            return true;
-        }
-
         self::sync_course_instances($event->courseid, $event->relateduserid);
 
         return true;
@@ -108,11 +93,6 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
      */
     public static function role_assigned(\core\event\role_assigned $event) {
         if (!enrol_is_enabled('metagroup')) {
-            return true;
-        }
-
-        // Prevent circular dependencies - we can not sync metagroup roles recursively.
-        if ($event->other['component'] === 'enrol_metagroup') {
             return true;
         }
 
@@ -138,11 +118,6 @@ class enrol_metagroup_observer extends enrol_metagroup_handler {
     public static function role_unassigned(\core\event\role_unassigned $event) {
         if (!enrol_is_enabled('metagroup')) {
             // All roles are removed via cron automatically.
-            return true;
-        }
-
-        // Prevent circular dependencies - we can not sync metagroup roles recursively.
-        if ($event->other['component'] === 'enrol_metagroup') {
             return true;
         }
 
