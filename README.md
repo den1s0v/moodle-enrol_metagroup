@@ -476,9 +476,9 @@ The array lists all course IDs that supply students to the linked group, in orde
 
 ### Computation algorithm
 
-The list is derived from the enrolment methods of all members of the source group:
+The list is derived from the enrolment methods of all members of the source group in the source course. Groups on an intermediate course may not be directly linked; they can be connected only through shared participants (e.g. a user added to group A via metagroup, and manually to group B). In such cases the parent course is still traced and included in `source_courses`.
 
-- **metagroup**: Use `customint4`/`customint1` of the parent link first; fallback to full recursive traversal via `enrol_metagroup_find_root_course`
+- **metagroup**: Any metagroup enrolment that brought a group member into the course (even if it adds to a different group). Use `customint4`/`customint1`; fallback to full recursive traversal via `enrol_metagroup_find_root_course`
 - **meta**: 2 levels (current course + parent course from `customint1`)
 - **other methods**: 1 level (current course only)
 
@@ -515,9 +515,9 @@ On the enrolment instance edit form, an informational block shows the full chain
 
 ### Алгоритм вычисления
 
-Список строится на основе способов зачисления участников группы-источника:
+Список строится на основе способов зачисления участников группы-источника в курсе-источнике. Группы на промежуточном курсе могут быть напрямую не связаны, а только по участникам (например, пользователь попал в группу A через metagroup, в группу B добавлен вручную). При этом связь с родительским курсом всё равно устанавливается и включается в `source_courses`.
 
-- **metagroup**: сначала используются `customint4`/`customint1` родительской связи; при отсутствии — полный рекурсивный обход через `enrol_metagroup_find_root_course`
+- **metagroup**: любой способ зачисления metagroup, через который участник группы попал в курс (даже если метагруппа добавляет в другую группу). Сначала `customint4`/`customint1`; при отсутствии — полный рекурсивный обход через `enrol_metagroup_find_root_course`
 - **meta**: 2 уровня (текущий курс + родительский курс из `customint1`)
 - **остальные способы**: 1 уровень (только текущий курс)
 
