@@ -568,7 +568,7 @@ function enrol_metagroup_compute_source_courses($source_courseid, $source_groupi
     $unique_enrols = $DB->get_records_sql($sql, $params);
 
     foreach ($unique_enrols as $enrol) {
-        if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+        if ($enrol->enrol === 'metagroup') {
             $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
             $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
             if ($parent_courseid && $parent_courseid != $source_courseid) {
@@ -645,7 +645,7 @@ function enrol_metagroup_get_chain_for_display($instance) {
     $paths = [];
     foreach ($unique_enrols as $enrol) {
         $chain = [];
-        if ($enrol->enrol === 'metagroup' && $enrol->customint2 == $source_groupid) {
+        if ($enrol->enrol === 'metagroup') {
             $parent_courseid = !empty($enrol->customint4) ? $enrol->customint4 : $enrol->customint1;
             $parent_groupid = !empty($enrol->customint5) ? $enrol->customint5 : $enrol->customint3;
             if ($parent_courseid && $parent_courseid != $source_courseid) {
