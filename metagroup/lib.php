@@ -620,7 +620,7 @@ class enrol_metagroup_plugin extends enrol_plugin {
 
         // Variant 2: 'autocomplete' — very slow UI. Removed from here.
 
-        //// $mform->addRule('customint1', get_string('required'), 'required', null, 'client');  // OFF: disable form locking after select+edit.
+        $mform->addRule('customint1', get_string('required'), 'required', null, 'client');
         $mform->addHelpButton('customint1', 'linkedcourse', 'enrol_metagroup');
 
         if ($edit_mode || $creation_stage == 2) {
