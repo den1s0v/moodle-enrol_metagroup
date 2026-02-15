@@ -1581,6 +1581,8 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
     // Шаг 1: Удаляем существующий инкремент вида " (N)" в конце имени
     $groupname = preg_replace('/ \(\d+\)$/', '', $groupname);
 
+    $addsuffix = (bool) get_config('enrol_metagroup', 'addgroupsuffix');
+
     // Шаг 2: Проверяем, заканчивается ли имя на суффикс (с учетом возможного инкремента)
     $suffixes = [' (связ.)', ' (linked)'];
     $has_suffix = false;
@@ -1596,21 +1598,26 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
         }
     }
 
-    // Шаг 3: Применяем шаблон только если суффикс отсутствует
-    if (!$has_suffix) {
+    // Шаг 3: Применяем шаблон только если настройка включена и суффикс отсутствует
+    if ($addsuffix && !$has_suffix) {
         $a = new stdClass();
         $a->name = $groupname;
         $a->increment = '';
         $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
     }
 
+    // Базовое имя для добавления (2), (3) при отключённом суффиксе.
+    $basegroupname = $groupname;
+
     // Check to see if the group name already exists in this course.
     // Add an incremented number if it does.
     $inc = 1;
     while ($DB->record_exists('groups', array('name' => $groupname, 'courseid' => $courseid))) {
         if ($always_create_new) {
-            // Если суффикс уже есть, добавляем инкремент напрямую
-            if ($has_suffix) {
+            if (!$addsuffix) {
+                $groupname = $basegroupname . ' (' . (++$inc) . ')';
+            } else if ($has_suffix) {
+                // Если суффикс уже есть, добавляем инкремент напрямую
                 $groupname = $groupname . ' (' . (++$inc) . ')';
             } else {
                 // Если суффикса нет, используем шаблон с инкрементом

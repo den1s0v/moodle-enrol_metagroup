@@ -61,6 +61,13 @@ if ($ADMIN->fulltree) {
             0 // По умолчанию: не удалять пустые группы
         ));
 
+        $settings->add(new admin_setting_configcheckbox(
+            'enrol_metagroup/addgroupsuffix',
+            get_string('addgroupsuffix', 'enrol_metagroup'),
+            get_string('addgroupsuffix_desc', 'enrol_metagroup'),
+            1
+        ));
+
         $sortoptions = array(
             'sortorder' => new lang_string('sort_sortorder', 'admin'),
             'fullname' => new lang_string('sort_fullname', 'admin'),

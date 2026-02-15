@@ -23,6 +23,8 @@
  */
 
 $string['addgroup'] = 'Add to group';
+$string['addgroupsuffix'] = 'Add "(linked)" suffix to group names';
+$string['addgroupsuffix_desc'] = 'If enabled, automatically created target groups will be named with a suffix (e.g. "Group (linked)"). Numbering (2), (3) for duplicate names still applies when disabled.';
 $string['cleanup_empty_groups'] = 'Clean empty groups';
 $string['cleanup_empty_groups_courseids'] = 'Course IDs';
 $string['cleanup_empty_groups_courseids_help'] = 'Comma-separated course IDs. Leave empty to process all courses that have metagroup instances.';
