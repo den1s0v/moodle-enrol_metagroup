@@ -1922,6 +1922,7 @@ function enrol_metagroup_delete_link($target_courseid, $source_courseid, $source
  *   - 'root_course_name' => string|null (customchar1 - root course name, if exists)
  *   - 'root_group_name' => string|null (customchar3 - root group name, if exists)
  *   - 'source_courses' => array (decoded from customtext1 JSON, empty array if not set)
+ *   - 'customtext1' => string|null (raw {enrol}.customtext1, for external tools)
  */
 function enrol_metagroup_get_all_links($target_courseid = null, $source_courseid = null) {
     global $DB;
@@ -1957,6 +1958,7 @@ function enrol_metagroup_get_all_links($target_courseid = null, $source_courseid
         $link->root_course_name = !empty($record->customchar1) ? $record->customchar1 : null;
         $link->root_group_name = !empty($record->customchar3) ? $record->customchar3 : null;
         $link->source_courses = [];
+        $link->customtext1 = $record->customtext1 ?? null;
         if (!empty($record->customtext1)) {
             $decoded = json_decode($record->customtext1, true);
             if (is_array($decoded) && isset($decoded['source_courses'])) {
