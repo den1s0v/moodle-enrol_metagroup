@@ -68,6 +68,13 @@ if ($ADMIN->fulltree) {
             1
         ));
 
+        $settings->add(new admin_setting_configcheckbox(
+            'enrol_metagroup/reuseemptygroup',
+            get_string('reuseemptygroup', 'enrol_metagroup'),
+            get_string('reuseemptygroup_desc', 'enrol_metagroup'),
+            1
+        ));
+
         $sortoptions = array(
             'sortorder' => new lang_string('sort_sortorder', 'admin'),
             'fullname' => new lang_string('sort_fullname', 'admin'),

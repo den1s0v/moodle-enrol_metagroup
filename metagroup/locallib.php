@@ -412,6 +412,239 @@ function enrol_metagroup_cleanup_empty_groups(array $courseids, $verbose = false
 }
 
 /**
+ * Retarget enrol_metagroup customint2 from one group id to another within a course.
+ *
+ * @param int $courseid
+ * @param int $fromid
+ * @param int $toid
+ */
+function enrol_metagroup_retarget_customint2($courseid, $fromid, $toid) {
+    global $DB;
+
+    if (empty($fromid) || empty($toid) || $fromid == $toid) {
+        return;
+    }
+    $DB->set_field('enrol', 'customint2', $toid, [
+        'enrol' => 'metagroup',
+        'courseid' => $courseid,
+        'customint2' => $fromid,
+    ]);
+}
+
+/**
+ * Collapse numbered empty group copies for one canonical name in a course.
+ *
+ * If an empty group without a number exists and there is exactly one non-empty
+ * "Name (N)" copy: keep the group with members (same id), retarget enrol links
+ * from the empty group, delete the empty group, rename the live copy.
+ * Does not move members between groups.
+ *
+ * @param int $courseid
+ * @param string $canonicalname Name without trailing " (N)"
+ * @param bool $dryrun
+ * @return array {
+ *   keeper_id: int|null,
+ *   actions: list of objects (action, courseid, groupid, name, newname?, fromid?, toid?),
+ *   total: int
+ * }
+ */
+function enrol_metagroup_collapse_empty_group_copies($courseid, $canonicalname, $dryrun = false) {
+    global $DB, $CFG;
+
+    require_once($CFG->dirroot . '/group/lib.php');
+
+    $result = [
+        'keeper_id' => null,
+        'actions' => [],
+        'total' => 0,
+    ];
+
+    $courseid = (int)$courseid;
+    $canonicalname = (string)$canonicalname;
+    if ($courseid <= 0 || $canonicalname === '') {
+        return $result;
+    }
+
+    $groups = $DB->get_records('groups', ['courseid' => $courseid], 'id ASC', 'id,courseid,name');
+    $exact = null;
+    $numbered = [];
+
+    foreach ($groups as $group) {
+        if ($group->name === $canonicalname) {
+            $exact = $group;
+            continue;
+        }
+        if (preg_match('/^' . preg_quote($canonicalname, '/') . ' \(\d+\)$/u', $group->name)) {
+            $numbered[] = $group;
+        }
+    }
+
+    if (empty($numbered) && !$exact) {
+        return $result;
+    }
+
+    $membercounts = [];
+    $allids = [];
+    if ($exact) {
+        $allids[] = $exact->id;
+    }
+    foreach ($numbered as $g) {
+        $allids[] = $g->id;
+    }
+    foreach ($allids as $gid) {
+        $membercounts[$gid] = $DB->count_records('groups_members', ['groupid' => $gid]);
+    }
+
+    $exactempty = $exact && empty($membercounts[$exact->id]);
+    $exactoccupied = $exact && !empty($membercounts[$exact->id]);
+    $live = [];
+    $empty_numbered = [];
+    foreach ($numbered as $g) {
+        if (!empty($membercounts[$g->id])) {
+            $live[] = $g;
+        } else {
+            $empty_numbered[] = $g;
+        }
+    }
+
+    $add_action = function($action, $group, $extra = []) use (&$result) {
+        $row = (object)array_merge([
+            'action' => $action,
+            'courseid' => $group->courseid,
+            'groupid' => $group->id,
+            'name' => $group->name,
+        ], $extra);
+        $result['actions'][] = $row;
+        $result['total']++;
+    };
+
+    $retarget_and_delete_empty = function($group, $toid) use ($dryrun, $courseid, $add_action) {
+        if ($toid) {
+            if ($dryrun) {
+                $add_action('retarget', $group, ['fromid' => $group->id, 'toid' => $toid]);
+            } else {
+                enrol_metagroup_retarget_customint2($courseid, $group->id, $toid);
+                $add_action('retarget', $group, ['fromid' => $group->id, 'toid' => $toid]);
+            }
+        }
+        if ($dryrun) {
+            $add_action('delete', $group);
+        } else {
+            try {
+                groups_delete_group($group->id);
+                $add_action('delete', $group);
+            } catch (Exception $e) {
+                $add_action('skipped', $group, ['error' => $e->getMessage()]);
+            }
+        }
+    };
+
+    // Occupied canonical: only remove empty numbered copies (retarget to it).
+    if ($exactoccupied) {
+        foreach ($empty_numbered as $g) {
+            $retarget_and_delete_empty($g, $exact->id);
+        }
+        return $result;
+    }
+
+    // No empty group without a number: do not rename or invent one.
+    if (!$exactempty) {
+        return $result;
+    }
+
+    // Empty canonical + exactly one live numbered copy: rename live, delete empty.
+    if (count($live) === 1) {
+        $livegroup = $live[0];
+        if ($dryrun) {
+            $add_action('retarget', $exact, ['fromid' => $exact->id, 'toid' => $livegroup->id]);
+            $add_action('delete', $exact);
+            $add_action('rename', $livegroup, ['newname' => $canonicalname]);
+        } else {
+            enrol_metagroup_retarget_customint2($courseid, $exact->id, $livegroup->id);
+            $add_action('retarget', $exact, ['fromid' => $exact->id, 'toid' => $livegroup->id]);
+            try {
+                groups_delete_group($exact->id);
+                $add_action('delete', $exact);
+            } catch (Exception $e) {
+                $add_action('skipped', $exact, ['error' => $e->getMessage()]);
+                // Name still taken — cannot rename.
+                $result['keeper_id'] = (int)$exact->id;
+                foreach ($empty_numbered as $g) {
+                    $retarget_and_delete_empty($g, $livegroup->id);
+                }
+                return $result;
+            }
+            $groupdata = groups_get_group($livegroup->id);
+            if ($groupdata) {
+                $groupdata->name = $canonicalname;
+                groups_update_group($groupdata);
+                $add_action('rename', $livegroup, ['newname' => $canonicalname]);
+            }
+        }
+        $result['keeper_id'] = (int)$livegroup->id;
+        foreach ($empty_numbered as $g) {
+            $retarget_and_delete_empty($g, $livegroup->id);
+        }
+        return $result;
+    }
+
+    // Empty canonical, zero or many live numbered: keep empty, delete empty numbered.
+    $result['keeper_id'] = (int)$exact->id;
+    foreach ($empty_numbered as $g) {
+        $retarget_and_delete_empty($g, $exact->id);
+    }
+    return $result;
+}
+
+/**
+ * Collapse numbered empty group copies for all name families in a course.
+ *
+ * @param int $courseid
+ * @param bool $dryrun
+ * @return array {actions: [...], total: int}
+ */
+function enrol_metagroup_collapse_course_groups($courseid, $dryrun = false) {
+    global $DB;
+
+    $result = [
+        'actions' => [],
+        'total' => 0,
+    ];
+
+    $courseid = (int)$courseid;
+    if ($courseid <= 0) {
+        return $result;
+    }
+
+    $groups = $DB->get_records('groups', ['courseid' => $courseid], 'id ASC', 'id,courseid,name');
+    $bybase = [];
+    foreach ($groups as $group) {
+        $base = preg_replace('/ \(\d+\)$/', '', $group->name);
+        if (!isset($bybase[$base])) {
+            $bybase[$base] = ['exact' => false, 'numbered' => false];
+        }
+        if ($group->name === $base) {
+            $bybase[$base]['exact'] = true;
+        } else {
+            $bybase[$base]['numbered'] = true;
+        }
+    }
+
+    foreach ($bybase as $canonical => $flags) {
+        if (!$flags['exact'] || !$flags['numbered']) {
+            continue;
+        }
+        $one = enrol_metagroup_collapse_empty_group_copies($courseid, $canonical, $dryrun);
+        foreach ($one['actions'] as $action) {
+            $result['actions'][] = $action;
+        }
+        $result['total'] += $one['total'];
+    }
+
+    return $result;
+}
+
+/**
  * Находит корневой курс через цепочку метагрупповых связей.
  *
  * Рекурсивно проходит по цепочке метагрупповых связей, чтобы найти корневой курс.
@@ -1442,6 +1675,30 @@ function enrol_metagroup_sync($courseid = NULL, $verbose = false) {
         mtrace('Starting user enrolment synchronisation (enrol_metagroup) ...');
     }
 
+    // Свернуть нумерованные пустые копии (пустое «Имя» + живое «Имя (N)» → переименовать живую).
+    $reuseempty = get_config('enrol_metagroup', 'reuseemptygroup');
+    if ($reuseempty === false) {
+        $reuseempty = 1; // Default matches settings.php.
+    }
+    if ($reuseempty) {
+        if ($courseid) {
+            $collapse = enrol_metagroup_collapse_course_groups($courseid, false);
+            if ($verbose && !empty($collapse['total'])) {
+                mtrace("  Collapsed numbered group copies in course $courseid: {$collapse['total']} action(s)");
+            }
+        } else {
+            $cids = $DB->get_fieldset_sql(
+                "SELECT DISTINCT courseid FROM {enrol} WHERE enrol = 'metagroup' AND courseid > 0"
+            );
+            foreach ($cids as $cid) {
+                $collapse = enrol_metagroup_collapse_course_groups($cid, false);
+                if ($verbose && !empty($collapse['total'])) {
+                    mtrace("  Collapsed numbered group copies in course $cid: {$collapse['total']} action(s)");
+                }
+            }
+        }
+    }
+
     // Шаг 1: Обработка потерянных связей (когда родительский курс или группа удалены).
     $enrols_having_link_lost = enrol_metagroup_sync_lost_links($courseid, $verbose);
 
@@ -1606,21 +1863,30 @@ function enrol_metagroup_create_new_group($courseid, $linkedgroupid = null, $exp
         $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
     }
 
-    // Базовое имя для добавления (2), (3) при отключённом суффиксе.
+    // Базовое имя для добавления (2), (3).
     $basegroupname = $groupname;
+
+    // Если включено: свернуть пустую группу без номера и единственную живую копию (N).
+    $reuseempty = get_config('enrol_metagroup', 'reuseemptygroup');
+    if ($reuseempty === false) {
+        $reuseempty = 1; // Default matches settings.php.
+    }
+    if ($reuseempty) {
+        $collapse = enrol_metagroup_collapse_empty_group_copies($courseid, $basegroupname, false);
+        if (!empty($collapse['keeper_id'])) {
+            return (int)$collapse['keeper_id'];
+        }
+    }
 
     // Check to see if the group name already exists in this course.
     // Add an incremented number if it does.
     $inc = 1;
     while ($DB->record_exists('groups', array('name' => $groupname, 'courseid' => $courseid))) {
         if ($always_create_new) {
-            if (!$addsuffix) {
+            if (!$addsuffix || $has_suffix) {
                 $groupname = $basegroupname . ' (' . (++$inc) . ')';
-            } else if ($has_suffix) {
-                // Если суффикс уже есть, добавляем инкремент напрямую
-                $groupname = $groupname . ' (' . (++$inc) . ')';
             } else {
-                // Если суффикса нет, используем шаблон с инкрементом
+                // Шаблон с инкрементом (суффикс «(связ.)» / «(linked)»).
                 $a->increment = '(' . (++$inc) . ')';
                 $groupname = trim(get_string('defaultgroupnametext', 'enrol_metagroup', $a));
             }

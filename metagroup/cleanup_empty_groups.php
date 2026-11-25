@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Admin page to cleanup empty orphaned groups in courses.
+ * Admin page to cleanup empty orphaned groups and collapse numbered copies.
  *
  * @package    enrol_metagroup
  * @copyright  2010 Petr Skoda {@link http://skodak.org}
@@ -30,7 +30,7 @@ global $DB;
 
 $courseids = optional_param('courseids', '', PARAM_RAW);
 $dryrun = optional_param('dryrun', 0, PARAM_BOOL);
-$submit = optional_param('submit', 0, PARAM_BOOL);
+$action = optional_param('action', '', PARAM_ALPHA);
 
 require_login();
 require_capability('moodle/site:config', context_system::instance());
@@ -49,6 +49,7 @@ echo $OUTPUT->heading(get_string('cleanup_empty_groups', 'enrol_metagroup'));
 
 echo html_writer::tag('p', get_string('cleanup_empty_groups_description', 'enrol_metagroup'), ['class' => 'mb-3']);
 
+// --- Form 1: orphan empty groups cleanup ---
 $form = html_writer::start_tag('form', ['method' => 'post', 'action' => $PAGE->url->out(false), 'class' => 'mform']);
 $form .= html_writer::start_tag('fieldset', ['class' => 'clearfix']);
 $form .= html_writer::tag('legend', get_string('cleanup_empty_groups', 'enrol_metagroup'), ['class' => 'sr-only']);
@@ -74,21 +75,70 @@ $form .= html_writer::div(
         'name' => 'dryrun',
         'id' => 'id_dryrun',
         'value' => '1',
-        'checked' => $dryrun ? 'checked' : null,
+        'checked' => ($dryrun && $action === 'cleanup') ? 'checked' : null,
     ]) .
     html_writer::label(get_string('cleanup_empty_groups_dryrun', 'enrol_metagroup'), 'id_dryrun'),
     'form-group form-check'
 );
 
 $form .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-$form .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'submit', 'value' => '1']);
-$form .= html_writer::empty_tag('input', ['type' => 'submit', 'value' => get_string('cleanup_empty_groups_run', 'enrol_metagroup'), 'class' => 'btn btn-primary']);
+$form .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'cleanup']);
+$form .= html_writer::empty_tag('input', [
+    'type' => 'submit',
+    'value' => get_string('cleanup_empty_groups_run', 'enrol_metagroup'),
+    'class' => 'btn btn-primary',
+]);
 $form .= html_writer::end_tag('fieldset');
 $form .= html_writer::end_tag('form');
-
 echo $form;
 
-if ($submit) {
+// --- Form 2: collapse numbered copies (exactly one course) ---
+echo $OUTPUT->heading(get_string('collapse_numbered_copies', 'enrol_metagroup'), 3);
+echo html_writer::tag('p', get_string('collapse_numbered_copies_description', 'enrol_metagroup'), ['class' => 'mb-3']);
+
+$form2 = html_writer::start_tag('form', ['method' => 'post', 'action' => $PAGE->url->out(false), 'class' => 'mform']);
+$form2 .= html_writer::start_tag('fieldset', ['class' => 'clearfix']);
+$form2 .= html_writer::tag('legend', get_string('collapse_numbered_copies', 'enrol_metagroup'), ['class' => 'sr-only']);
+
+$form2 .= html_writer::div(
+    html_writer::label(get_string('cleanup_empty_groups_courseids', 'enrol_metagroup'), 'id_collapse_courseid') .
+    html_writer::empty_tag('input', [
+        'type' => 'text',
+        'name' => 'courseids',
+        'id' => 'id_collapse_courseid',
+        'value' => s($courseids),
+        'class' => 'form-control',
+        'size' => 20,
+        'placeholder' => 'e.g. 5',
+    ]) .
+    html_writer::span(get_string('collapse_numbered_copies_courseid_required', 'enrol_metagroup'), 'form-text text-muted'),
+    'form-group'
+);
+
+$form2 .= html_writer::div(
+    html_writer::empty_tag('input', [
+        'type' => 'checkbox',
+        'name' => 'dryrun',
+        'id' => 'id_collapse_dryrun',
+        'value' => '1',
+        'checked' => ($dryrun && $action === 'collapse') ? 'checked' : null,
+    ]) .
+    html_writer::label(get_string('cleanup_empty_groups_dryrun', 'enrol_metagroup'), 'id_collapse_dryrun'),
+    'form-group form-check'
+);
+
+$form2 .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+$form2 .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'collapse']);
+$form2 .= html_writer::empty_tag('input', [
+    'type' => 'submit',
+    'value' => get_string('collapse_numbered_copies_run', 'enrol_metagroup'),
+    'class' => 'btn btn-secondary',
+]);
+$form2 .= html_writer::end_tag('fieldset');
+$form2 .= html_writer::end_tag('form');
+echo $form2;
+
+if ($action === 'cleanup') {
     require_sesskey();
     $ids = [];
     if (trim($courseids) !== '') {
@@ -98,7 +148,9 @@ if ($submit) {
     $result = enrol_metagroup_cleanup_empty_groups($ids, true, (bool)$dryrun);
 
     echo $OUTPUT->heading(
-        $dryrun ? get_string('cleanup_empty_groups_preview_result', 'enrol_metagroup') : get_string('cleanup_empty_groups_result', 'enrol_metagroup'),
+        $dryrun
+            ? get_string('cleanup_empty_groups_preview_result', 'enrol_metagroup')
+            : get_string('cleanup_empty_groups_result', 'enrol_metagroup'),
         3
     );
 
@@ -137,6 +189,78 @@ if ($submit) {
             get_string('cleanup_empty_groups_total', 'enrol_metagroup', $result['total_deleted']),
             'alert alert-info'
         );
+    }
+
+    echo html_writer::link($returnurl, get_string('back', 'core'));
+} else if ($action === 'collapse') {
+    require_sesskey();
+
+    $parts = array_values(array_filter(array_map('trim', explode(',', $courseids)), 'strlen'));
+    $ids = array_map('intval', $parts);
+    $ids = array_values(array_filter($ids));
+
+    if (count($ids) !== 1) {
+        echo html_writer::div(
+            get_string('collapse_numbered_copies_courseid_required', 'enrol_metagroup'),
+            'alert alert-danger'
+        );
+    } else {
+        $cid = $ids[0];
+        // Forced: runs even when reuseemptygroup setting is off.
+        $result = enrol_metagroup_collapse_course_groups($cid, (bool)$dryrun);
+
+        echo $OUTPUT->heading(
+            $dryrun
+                ? get_string('collapse_numbered_copies_preview_result', 'enrol_metagroup')
+                : get_string('collapse_numbered_copies_result', 'enrol_metagroup'),
+            3
+        );
+
+        if (empty($result['actions'])) {
+            echo html_writer::div(get_string('collapse_numbered_copies_none', 'enrol_metagroup'), 'alert alert-info');
+        } else {
+            $table = new html_table();
+            $table->head = [
+                get_string('course', 'core'),
+                get_string('group', 'core'),
+                get_string('status', 'core'),
+            ];
+            $table->data = [];
+            $table->attributes['class'] = 'generaltable';
+
+            $coursename = $DB->get_field('course', 'shortname', ['id' => $cid]);
+            $courselabel = $coursename ? s($coursename) : $cid;
+
+            foreach ($result['actions'] as $row) {
+                $label = s($row->name);
+                if ($row->action === 'rename' && !empty($row->newname)) {
+                    $label .= ' → ' . s($row->newname) . ' (id ' . (int)$row->groupid . ')';
+                    $status = $dryrun
+                        ? get_string('collapse_numbered_copies_would_rename', 'enrol_metagroup')
+                        : get_string('collapse_numbered_copies_renamed', 'enrol_metagroup');
+                } else if ($row->action === 'delete') {
+                    $status = $dryrun
+                        ? get_string('collapse_numbered_copies_would_delete', 'enrol_metagroup')
+                        : get_string('collapse_numbered_copies_deleted', 'enrol_metagroup');
+                } else if ($row->action === 'retarget') {
+                    $label .= ' → id ' . (int)$row->toid;
+                    $status = get_string('collapse_numbered_copies_retargeted', 'enrol_metagroup');
+                } else if ($row->action === 'skipped') {
+                    $status = !empty($row->error)
+                        ? s($row->error)
+                        : get_string('cleanup_empty_groups_skipped', 'enrol_metagroup');
+                } else {
+                    $status = s($row->action);
+                }
+                $table->data[] = [$courselabel, $label, $status];
+            }
+
+            echo html_writer::table($table);
+            echo html_writer::div(
+                get_string('collapse_numbered_copies_total', 'enrol_metagroup', $result['total']),
+                'alert alert-info'
+            );
+        }
     }
 
     echo html_writer::link($returnurl, get_string('back', 'core'));
